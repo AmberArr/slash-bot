@@ -35,17 +35,12 @@ executable slash-bot
     , containers
     , deepseq
     , fast-logger
-    , filepath
     , http-types
     , megaparsec
     , mtl
-    , pretty-simple
     , wai
     , warp
     , servant-client
-    , servant-multipart-api
-    , servant-multipart-client
-    , servant-server
     , strict
     , string-interpolate
     , telegram-bot-simple
