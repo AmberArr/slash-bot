@@ -10,6 +10,9 @@ import Control.Concurrent
 import Control.Monad
 import Data.Aeson (decode)
 import Data.Function
+import Data.HashMap.Strict (HashMap)
+import qualified Data.HashMap.Strict as HashMap
+import Data.IORef
 import Data.List (foldl')
 import Data.Maybe
 import Data.Set (Set)
@@ -17,24 +20,18 @@ import qualified Data.Set as Set
 import Data.String.Interpolate (i)
 import Data.Text (Text)
 import qualified Data.Text as T
-import GHC.Conc
 import Network.HTTP.Types
 import Network.Wai
 import Network.Wai.Handler.Warp (runEnv)
 import Servant.Client
 import System.Environment
-import System.IO.Unsafe
-import Telegram.Bot.API
-import Telegram.Bot.Simple
-import Telegram.Bot.Simple.BotApp.Internal
+import Telegram.Bot.API as Tg
 import qualified Telegram.Bot.Simple.UpdateParser as P
 
-data Action =
-    NoOp
-  | Inner !MessageId !ActionInner
-  deriving (Show, Eq)
+type Blacklist = Set Text
+type Blacklists = HashMap ChatId Blacklist
 
-data ActionInner =
+data Action =
     Ping
   | BlackListAdd ![Text]
   | BlackListDel ![Text]
@@ -42,32 +39,27 @@ data ActionInner =
   | Reply !Text
   deriving (Show, Eq)
 
-type Model = Set Text
+runTgApi :: ClientM (Tg.Response a) -> ClientEnv -> IO a
+runTgApi client env = either (error . show) id <$>
+  runClientM (fmap responseResult client) env
 
--- Maybe I should put it in the `Model`, but anyway it works.
-botName :: Text
-botName =
-  unsafePerformIO (maybe (error "Missing env: BOT_NAME") T.pack <$> lookupEnv "BOT_NAME")
-{-# NOINLINE botName #-}
+handleUpdate :: Update -> ClientEnv -> IORef Blacklists -> IO ()
+handleUpdate update clientenv blacklistsRef = do
+  blacklists <- readIORef blacklistsRef
+  Just botUsername <- userUsername <$> runTgApi getMe clientenv
+  let Just chatId = updateChatId update
+  let blacklist = fromMaybe Set.empty (HashMap.lookup chatId blacklists)
 
-slashBot :: BotApp Model Action
-slashBot = BotApp
-  { botInitialModel = Set.empty
-  , botAction = botAction'
-  , botHandler = botHandler'
-  , botJobs = []
-  }
+  let maction = handle1 update botUsername blacklist
+  case maction of
+    Just action -> do
+      newBlacklist <- handleEffectful action blacklist
+      atomicModifyIORef' blacklistsRef $
+        \blacklists -> (HashMap.insert chatId newBlacklist blacklists, ())
+    Nothing -> pure ()
 
-botAction' :: Update -> Model -> Maybe Action
-botAction' update model = do
-  messageId <- updateMessage update >>= pure . messageMessageId
-  inner <- botActionInner update model
-  pure $ Inner messageId inner
-
-{-# ANN botAction' ("HLint: ignore Use <&>" :: String) #-}
--- Sorry for mixing jargons randomly.
-botActionInner :: Update -> Model -> Maybe ActionInner
-botActionInner update model = flip P.parseUpdate update $ do
+handle1 :: Update -> Text -> Blacklist -> Maybe Action
+handle1 update botUsername blacklist = flip P.parseUpdate update $ do
   text <- P.text
   when (T.head text /= '/') $ fail "not a command"
 
@@ -77,7 +69,7 @@ botActionInner update model = flip P.parseUpdate update $ do
     ("_blacklist" : "del" : xs)        -> pure $ BlackListDel xs
     ["_blacklist"]                     -> pure BlackListList
     ((T.break (== '@') -> (cmd, botName)) : _)
-      | cmd `Set.member` model || not (T.null botName)
+      | cmd `Set.member` blacklist || not (T.null botName)
                                        -> fail ""
     ["me"]                             -> fail ""
     ["you"]                            -> fail ""
@@ -100,71 +92,54 @@ botActionInner update model = flip P.parseUpdate update $ do
             >=> pure . (userFirstName &&& userId))
     recipient = mention recipientId recipient0
 
-    messageId = fromJust $ messageMessageId <$> updateMessage update
-
     stripBotName text = case T.words text of
-      ((T.stripSuffix ("@" <> botName) -> Just x) : xs) -> T.unwords (x:xs)
+      ((T.stripSuffix ("@" <> botUsername) -> Just x) : xs) -> T.unwords (x:xs)
       _ -> text
 
-
-botHandler' :: Action -> Model -> Eff Action Model
-botHandler' NoOp model = pure model
-botHandler' (Inner messageId actionInner) model = case actionInner of
-  Ping -> model <# do
-    reply' "111"
-    pure NoOp
-  BlackListAdd xs -> foldl' (flip Set.insert) model xs <# do
-    reply' "ok"
-    pure NoOp
-  BlackListDel xs -> foldl' (flip Set.delete) model xs <# do
-    reply' "ok"
-    pure NoOp
-  BlackListList -> model <# do
-    let size = Set.size model
+handleEffectful :: Action -> Blacklist -> IO Blacklist
+handleEffectful actionInner blacklist = case actionInner of
+  Ping -> blacklist <$ reply "111"
+  BlackListAdd xs ->
+    foldl' (flip Set.delete) blacklist xs <$ reply "ok"
+  BlackListDel xs ->
+    foldl' (flip Set.delete) blacklist xs <$ reply "ok"
+  BlackListList -> blacklist <$ do
+    let size = Set.size blacklist
         s = if size == 1 then "" else "s" :: Text
-    reply' $ T.unlines
+    reply $ T.unlines
       [ [i|Blacklisted #{size} command#{s}:|]
-      , T.intercalate " " (Set.toList model)
+      , T.intercalate " " (Set.toList blacklist)
       ]
-    pure NoOp
-  Reply x -> model <# do
-    reply' x
-    pure NoOp
-  where
-    reply' x =
-      reply $ (toReplyMessage x){ replyMessageReplyToMessageId = Just messageId
-                                , replyMessageParseMode = Just HTML
-                                }
+  Reply x -> blacklist <$ do
+    reply x
+
+reply :: Text -> IO ()
+reply x = void $ flip runTgApi undefined $ sendMessage SendMessageRequest
+  { sendMessageChatId = undefined
+  , sendMessageText = x
+  , sendMessageParseMode = Nothing
+  , sendMessageDisableWebPagePreview = Nothing
+  , sendMessageDisableNotification = Nothing
+  , sendMessageReplyToMessageId = Nothing
+  , sendMessageReplyMarkup = Nothing
+  }
 
 main :: IO ()
-main = do
-  token <- maybe (error "Missing env: TOKEN") (Token . T.pack) <$> lookupEnv "TOKEN"
-  startBotWebhook (conversationBot updateChatId slashBot) token
+main = (Token . T.pack <$> getEnv "TOKEN") >>= startWebhook
 
-startBotWebhook :: BotApp model action -> Token -> IO ()
-startBotWebhook bot (Token token) = do
-  env <- token `seq` defaultTelegramClientEnv (Token token)
-  botenv <- startBotEnv bot env
+startWebhook :: Token -> IO ()
+startWebhook (Token token) = do
+  env <- defaultTelegramClientEnv (Token token)
+  blacklistsRef <- newIORef HashMap.empty
   runEnv 3000 $ \req respond -> do
     if pathInfo req == ["bot" <> token]
       then do
         mupdate <- decode <$> strictRequestBody req
-        forM_ mupdate $ \update -> void $ forkIO $ handleUpdate bot botenv update
+        forM_ mupdate $ \update ->
+          forkIO $ handleUpdate update env blacklistsRef
         respond $ responseLBS status200 [] ""
-      else do
+      else
         respond $ responseLBS status404 [] ""
-
-startBotEnv :: BotApp model action -> ClientEnv -> IO (BotEnv model action)
-startBotEnv bot env = do
-  botEnv <- defaultBotEnv bot env
-  _jobThreadIds <- scheduleBotJobs botEnv (botJobs bot)
-  _actionsThreadId <- processActionsIndefinitely bot botEnv
-  pure botEnv
-
-handleUpdate :: BotApp model action -> BotEnv model action -> Update -> IO ()
-handleUpdate BotApp{..} botEnv@BotEnv{..} update = do
-  maction <- botAction update <$> readTVarIO botModelVar
-  forM_ maction (issueAction botEnv (Just update))
 
 mention :: UserId -> Text -> Text
 mention (UserId userId) content =
