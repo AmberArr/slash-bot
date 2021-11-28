@@ -23,8 +23,9 @@ executable slash-bot
   main-is:          Main.hs
 
   -- Modules included in this executable, other than Main.
-  -- other-modules:
-
+  other-modules:    Interface.Bot
+                  , Config
+                  , Bot
   -- LANGUAGE extensions used by modules in this package.
   -- other-extensions:
   hs-source-dirs:   src
@@ -33,6 +34,7 @@ executable slash-bot
     , base ^>=4.15.0.0
     , bytestring
     , containers
+    , data-has
     , deepseq
     , fast-logger
     , http-types

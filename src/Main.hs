@@ -1,3 +1,5 @@
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE RecordWildCards #-}
@@ -8,8 +10,10 @@ module Main where
 import Control.Arrow ((&&&))
 import Control.Concurrent
 import Control.Monad
+import Control.Monad.Reader
 import Data.Aeson (decode)
 import Data.Function
+import Data.Has
 import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as HashMap
 import Data.IORef
@@ -25,11 +29,15 @@ import Network.Wai
 import Network.Wai.Handler.Warp (runEnv)
 import Servant.Client
 import System.Environment
-import Telegram.Bot.API as Tg
+import qualified Telegram.Bot.API as Tg
 import qualified Telegram.Bot.Simple.UpdateParser as P
 
+import Bot
+import Config
+import Interface.Bot
+
 type Blacklist = Set Text
-type Blacklists = HashMap ChatId Blacklist
+type Blacklists = HashMap Tg.ChatId Blacklist
 
 data Action =
     Ping
@@ -39,26 +47,22 @@ data Action =
   | Reply !Text
   deriving (Show, Eq)
 
-runTgApi :: ClientM (Tg.Response a) -> ClientEnv -> IO a
-runTgApi client env = either (error . show) id <$>
-  runClientM (fmap responseResult client) env
+handleUpdate :: (MonadIO m, WithBot r m, MonadReader r m, Has ClientEnv r, Monad m)
+             => Tg.Update -> ClientEnv -> IORef Blacklists -> m ()
+handleUpdate update env blacklistsRef = do
+  blacklists <- liftIO $ readIORef blacklistsRef
+  botUsername <- fromJust . Tg.userUsername <$> getMe
+  forM_ (Tg.updateChatId update) $ \chatId -> do
+    let blacklist = fromMaybe Set.empty (HashMap.lookup chatId blacklists)
+        maction = handle1 update botUsername blacklist
+    case maction of
+      Just action -> do
+        newBlacklist <- handleEffectful update action blacklist
+        liftIO $ atomicModifyIORef' blacklistsRef $
+          \blacklists -> (HashMap.insert chatId newBlacklist blacklists, ())
+      Nothing -> pure ()
 
-handleUpdate :: Update -> ClientEnv -> IORef Blacklists -> IO ()
-handleUpdate update clientenv blacklistsRef = do
-  blacklists <- readIORef blacklistsRef
-  Just botUsername <- userUsername <$> runTgApi getMe clientenv
-  let Just chatId = updateChatId update
-  let blacklist = fromMaybe Set.empty (HashMap.lookup chatId blacklists)
-
-  let maction = handle1 update botUsername blacklist
-  case maction of
-    Just action -> do
-      newBlacklist <- handleEffectful action blacklist
-      atomicModifyIORef' blacklistsRef $
-        \blacklists -> (HashMap.insert chatId newBlacklist blacklists, ())
-    Nothing -> pure ()
-
-handle1 :: Update -> Text -> Blacklist -> Maybe Action
+handle1 :: Tg.Update -> Text -> Blacklist -> Maybe Action
 handle1 update botUsername blacklist = flip P.parseUpdate update $ do
   text <- P.text
   when (T.head text /= '/') $ fail "not a command"
@@ -80,69 +84,60 @@ handle1 update botUsername blacklist = flip P.parseUpdate update $ do
     []                                 -> fail ""
   where
     (sender0, senderId) = fromJust $
-      update & (updateMessage
-            >=> messageFrom
-            >=> pure . (userFirstName &&& userId))
+      update & (Tg.updateMessage
+            >=> Tg.messageFrom
+            >=> pure . (Tg.userFirstName &&& Tg.userId))
     sender = mention senderId sender0
 
     (recipient0, recipientId) = fromMaybe ("自己", senderId) $
-      update & (updateMessage
-            >=> messageReplyToMessage
-            >=> messageFrom
-            >=> pure . (userFirstName &&& userId))
+      update & (Tg.updateMessage
+            >=> Tg.messageReplyToMessage
+            >=> Tg.messageFrom
+            >=> pure . (Tg.userFirstName &&& Tg.userId))
     recipient = mention recipientId recipient0
 
     stripBotName text = case T.words text of
       ((T.stripSuffix ("@" <> botUsername) -> Just x) : xs) -> T.unwords (x:xs)
       _ -> text
 
-handleEffectful :: Action -> Blacklist -> IO Blacklist
-handleEffectful actionInner blacklist = case actionInner of
-  Ping -> blacklist <$ reply "111"
+handleEffectful :: (MonadIO m, WithBot r m, MonadReader r m, Has ClientEnv r, Monad m)
+                => Tg.Update -> Action -> Blacklist -> m Blacklist
+handleEffectful update actionInner blacklist = case actionInner of
+  Ping -> blacklist <$ reply' "111"
   BlackListAdd xs ->
-    foldl' (flip Set.delete) blacklist xs <$ reply "ok"
+    foldl' (flip Set.delete) blacklist xs <$ reply' "ok"
   BlackListDel xs ->
-    foldl' (flip Set.delete) blacklist xs <$ reply "ok"
+    foldl' (flip Set.delete) blacklist xs <$ reply' "ok"
   BlackListList -> blacklist <$ do
     let size = Set.size blacklist
         s = if size == 1 then "" else "s" :: Text
-    reply $ T.unlines
+    reply' $ T.unlines
       [ [i|Blacklisted #{size} command#{s}:|]
       , T.intercalate " " (Set.toList blacklist)
       ]
   Reply x -> blacklist <$ do
-    reply x
-
-reply :: Text -> IO ()
-reply x = void $ flip runTgApi undefined $ sendMessage SendMessageRequest
-  { sendMessageChatId = undefined
-  , sendMessageText = x
-  , sendMessageParseMode = Nothing
-  , sendMessageDisableWebPagePreview = Nothing
-  , sendMessageDisableNotification = Nothing
-  , sendMessageReplyToMessageId = Nothing
-  , sendMessageReplyMarkup = Nothing
-  }
+    reply' x
+  where reply' = reply update
 
 main :: IO ()
-main = (Token . T.pack <$> getEnv "TOKEN") >>= startWebhook
+main = (Tg.Token . T.pack <$> getEnv "TOKEN") >>= startWebhook
 
-startWebhook :: Token -> IO ()
-startWebhook (Token token) = do
-  env <- defaultTelegramClientEnv (Token token)
+startWebhook :: Tg.Token -> IO ()
+startWebhook (Tg.Token token) = do
+  env <- Tg.defaultTelegramClientEnv (Tg.Token token)
   blacklistsRef <- newIORef HashMap.empty
   runEnv 3000 $ \req respond -> do
     if pathInfo req == ["bot" <> token]
       then do
         mupdate <- decode <$> strictRequestBody req
         forM_ mupdate $ \update ->
-          forkIO $ handleUpdate update env blacklistsRef
+          forkIO $ flip runBotM (mkEnv (BotConfig (Just Tg.HTML)) env) $ handleUpdate update env blacklistsRef
         respond $ responseLBS status200 [] ""
       else
         respond $ responseLBS status404 [] ""
 
-mention :: UserId -> Text -> Text
-mention (UserId userId) content =
+mention :: Tg.UserId -> Text -> Text
+mention (Tg.UserId userId) content =
   "<a href=\"tg://user?id=" <> T.pack (show userId) <> "\">" <> content <> "</a>"
 
 escape :: Text -> Text
