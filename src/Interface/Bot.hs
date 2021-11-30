@@ -13,25 +13,30 @@ import qualified Telegram.Bot.API as Tg
 
 import Config
 
-type WithBot env m = (MonadBot m, MonadReader env m, Has BotConfig env)
+type WithBot env m =
+  (MonadBot m, MonadReader env m, Has BotConfig env, Has ClientEnv env)
 
 class Monad m => MonadBot m where
   getMe :: m Tg.User
   sendMessage :: Tg.SendMessageRequest -> m Tg.Message
 
-reply :: (MonadBot m, MonadReader r m, Has BotConfig r)
-      => Tg.Update -> Text -> m ()
-reply update text = do
+sendTextTo :: (MonadBot m, MonadReader r m, Has BotConfig r)
+              => Tg.SomeChatId -> Maybe Tg.MessageId -> Text -> m ()
+sendTextTo chatId messageId text = do
   parseMode <- botCfgParseMode <$> asks getter
   void $ sendMessage Tg.SendMessageRequest
-    { Tg.sendMessageChatId = Tg.SomeChatId chatId
+    { Tg.sendMessageChatId = chatId
     , Tg.sendMessageText = text
     , Tg.sendMessageParseMode = parseMode
     , Tg.sendMessageDisableWebPagePreview = Nothing
     , Tg.sendMessageDisableNotification = Nothing
-    , Tg.sendMessageReplyToMessageId = Nothing
+    , Tg.sendMessageReplyToMessageId = messageId
     , Tg.sendMessageReplyMarkup = Nothing
     }
+
+reply :: (MonadBot m, MonadReader r m, Has BotConfig r)
+      => Tg.Update -> Text -> m ()
+reply update text = sendTextTo (Tg.SomeChatId chatId) messageId text
   where
     messageId = update & (Tg.updateMessage
                       >=> pure . Tg.messageMessageId)

@@ -11,22 +11,19 @@ import Control.Arrow ((&&&))
 import Control.Concurrent
 import Control.Monad
 import Control.Monad.Reader
+import Control.Monad.Trans.Maybe
 import Data.Aeson (decode)
 import Data.Function
 import Data.Has
-import Data.HashMap.Strict (HashMap)
-import qualified Data.HashMap.Strict as HashMap
-import Data.IORef
-import Data.List (foldl')
 import Data.Maybe
-import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.String.Interpolate (i)
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Database.SQLite.Simple as SQLite
 import Network.HTTP.Types
 import Network.Wai
-import Network.Wai.Handler.Warp (runEnv)
+import Network.Wai.Handler.Warp as Warp
 import Servant.Client
 import System.Environment
 import qualified Telegram.Bot.API as Tg
@@ -34,10 +31,8 @@ import qualified Telegram.Bot.Simple.UpdateParser as P
 
 import Bot
 import Config
-import Interface.Bot
-
-type Blacklist = Set Text
-type Blacklists = HashMap Tg.ChatId Blacklist
+import Db (DBConn, mkTable)
+import Interface
 
 data Action =
     Ping
@@ -47,20 +42,18 @@ data Action =
   | Reply !Text
   deriving (Show, Eq)
 
-handleUpdate :: (MonadIO m, WithBot r m, MonadReader r m, Has ClientEnv r, Monad m)
-             => Tg.Update -> ClientEnv -> IORef Blacklists -> m ()
-handleUpdate update env blacklistsRef = do
-  blacklists <- liftIO $ readIORef blacklistsRef
-  botUsername <- fromJust . Tg.userUsername <$> getMe
-  forM_ (Tg.updateChatId update) $ \chatId -> do
-    let blacklist = fromMaybe Set.empty (HashMap.lookup chatId blacklists)
-        maction = handle1 update botUsername blacklist
-    case maction of
-      Just action -> do
-        newBlacklist <- handleEffectful update action blacklist
-        liftIO $ atomicModifyIORef' blacklistsRef $
-          \blacklists -> (HashMap.insert chatId newBlacklist blacklists, ())
-      Nothing -> pure ()
+mkEnv :: BotConfig -> ClientEnv -> DBConn -> Env
+mkEnv x y conn = (x, y, conn)
+
+handleUpdate :: (WithBlacklist m, WithBot r m)
+             => Tg.Update -> m ()
+handleUpdate update = void $ runMaybeT $ do
+  botUsername <- botCfgUsername <$> asks getter
+  chatId <- MaybeT $ pure $ Tg.updateChatId update
+  action <- MaybeT $ handle1 update botUsername <$> getBlacklist chatId
+  message <- MaybeT $ pure $ update & Tg.updateMessage
+  let messageId = Tg.messageMessageId message
+  lift $ handleEffectful chatId messageId action
 
 handle1 :: Tg.Update -> Text -> Blacklist -> Maybe Action
 handle1 update botUsername blacklist = flip P.parseUpdate update $ do
@@ -100,38 +93,49 @@ handle1 update botUsername blacklist = flip P.parseUpdate update $ do
       ((T.stripSuffix ("@" <> botUsername) -> Just x) : xs) -> T.unwords (x:xs)
       _ -> text
 
-handleEffectful :: (MonadIO m, WithBot r m, MonadReader r m, Has ClientEnv r, Monad m)
-                => Tg.Update -> Action -> Blacklist -> m Blacklist
-handleEffectful update actionInner blacklist = case actionInner of
-  Ping -> blacklist <$ reply' "111"
-  BlackListAdd xs ->
-    foldl' (flip Set.delete) blacklist xs <$ reply' "ok"
-  BlackListDel xs ->
-    foldl' (flip Set.delete) blacklist xs <$ reply' "ok"
-  BlackListList -> blacklist <$ do
+handleEffectful :: (WithBlacklist m, WithBot r m)
+                => Tg.ChatId -> Tg.MessageId -> Action -> m ()
+handleEffectful chatId messageId action = case action of
+  Ping -> reply' "111"
+  BlackListAdd xs -> do
+    forM_ xs $ addBlacklistItem chatId
+    reply' "ok"
+  BlackListDel xs -> do
+    forM_ xs $ delBlacklistItem chatId
+    reply' "ok"
+  BlackListList -> do
+    blacklist <- getBlacklist chatId
     let size = Set.size blacklist
         s = if size == 1 then "" else "s" :: Text
     reply' $ T.unlines
       [ [i|Blacklisted #{size} command#{s}:|]
       , T.intercalate " " (Set.toList blacklist)
       ]
-  Reply x -> blacklist <$ do
-    reply' x
-  where reply' = reply update
+  Reply x -> reply' x
+  where reply' = sendTextTo (Tg.SomeChatId chatId) (Just messageId)
 
 main :: IO ()
-main = (Tg.Token . T.pack <$> getEnv "TOKEN") >>= startWebhook
+main = do
+  token <- Tg.Token . T.pack <$> getEnv "TOKEN"
+  clientEnv <- Tg.defaultTelegramClientEnv token
+  Just botUsername <- Tg.userUsername <$>
+    runReaderT (runTgApi_ Tg.getMe) clientEnv
 
-startWebhook :: Tg.Token -> IO ()
-startWebhook (Tg.Token token) = do
-  env <- Tg.defaultTelegramClientEnv (Tg.Token token)
-  blacklistsRef <- newIORef HashMap.empty
-  runEnv 3000 $ \req respond -> do
+  SQLite.withConnection "db.sqlite" $ \conn -> do
+    mkTable conn
+    startWebhook token $ \update -> runBotM
+      (handleUpdate update)
+      (mkEnv (BotConfig (Just Tg.HTML) botUsername) clientEnv conn)
+
+
+startWebhook :: Tg.Token -> (Tg.Update -> IO ()) -> IO ()
+startWebhook (Tg.Token token) handler = do
+  Warp.runEnv 3000 $ \req respond -> do
     if pathInfo req == ["bot" <> token]
       then do
         mupdate <- decode <$> strictRequestBody req
         forM_ mupdate $ \update ->
-          forkIO $ flip runBotM (mkEnv (BotConfig (Just Tg.HTML)) env) $ handleUpdate update env blacklistsRef
+          forkIO $ handler update
         respond $ responseLBS status200 [] ""
       else
         respond $ responseLBS status404 [] ""

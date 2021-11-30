@@ -23,9 +23,13 @@ executable slash-bot
   main-is:          Main.hs
 
   -- Modules included in this executable, other than Main.
-  other-modules:    Interface.Bot
+  other-modules:    Bot
                   , Config
-                  , Bot
+                  , Db
+                  , Db.Blacklist
+                  , Interface
+                  , Interface.Blacklist
+                  , Interface.Bot
   -- LANGUAGE extensions used by modules in this package.
   -- other-extensions:
   hs-source-dirs:   src
@@ -45,8 +49,9 @@ executable slash-bot
     , servant-client
     , strict
     , string-interpolate
+    , sqlite-simple
     , telegram-bot-simple
     , text
-    , unordered-containers
+    , transformers
     , vector
   default-language: Haskell2010
