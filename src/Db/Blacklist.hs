@@ -14,8 +14,8 @@ addBlacklistItem conn (Tg.ChatId chatId) cmd = execute conn [iii|
 
 delBlacklistItem :: Connection -> Tg.ChatId -> Text -> IO ()
 delBlacklistItem conn (Tg.ChatId chatId) cmd = execute conn [iii|
-  DELETE FROM blacklist_command (chat_id, command)
-  VALUES (?, ?)
+  DELETE FROM blacklist_command
+  WHERE chat_id = ? AND command = ?
 |] (chatId, cmd)
 
 getBlacklist :: Connection -> Tg.ChatId -> IO [Text]
