@@ -49,7 +49,7 @@ executable slash-bot
     , servant-client
     , strict
     , string-interpolate
-    , sqlite-simple
+    , postgresql-simple
     , telegram-bot-simple
     , text
     , transformers

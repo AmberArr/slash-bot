@@ -13,6 +13,7 @@ import Control.Monad
 import Control.Monad.Reader
 import Control.Monad.Trans.Maybe
 import Data.Aeson (decode)
+import qualified Data.ByteString.Char8 as BC
 import Data.Function
 import Data.Has
 import Data.Maybe
@@ -20,7 +21,6 @@ import qualified Data.Set as Set
 import Data.String.Interpolate (i)
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Database.SQLite.Simple as SQLite
 import Network.HTTP.Types
 import Network.Wai
 import Network.Wai.Handler.Warp as Warp
@@ -31,7 +31,7 @@ import qualified Telegram.Bot.Simple.UpdateParser as P
 
 import Bot
 import Config
-import Db (DBConn, mkTable)
+import Db (DBConn, mkTable, withDBConn)
 import Interface
 
 data Action =
@@ -121,7 +121,8 @@ main = do
   Just botUsername <- Tg.userUsername <$>
     runReaderT (runTgApi_ Tg.getMe) clientEnv
 
-  SQLite.withConnection "db.sqlite" $ \conn -> do
+  dburl <- BC.pack <$> getEnv "DATABASE_URL"
+  withDBConn dburl $ \conn -> do
     mkTable conn
     startWebhook token $ \update -> runBotM
       (handleUpdate update)
