@@ -10,15 +10,15 @@ import Db.Blacklist
 
 import Control.Exception (bracket)
 import qualified Data.ByteString as BS
-import Data.String.Interpolate (iii)
 import Database.PostgreSQL.Simple
+import Database.PostgreSQL.Simple.SqlQQ
 
 type DBConn = Connection
 
 mkTable :: Connection -> IO ()
-mkTable conn = () <$ execute_ conn [iii|CREATE TABLE IF NOT EXISTS blacklist_command (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  chat_id INTEGER,
+mkTable conn = () <$ execute_ conn [sql|CREATE TABLE IF NOT EXISTS blacklist_command (
+  id SERIAL PRIMARY KEY,
+  chat_id BIGINT,
   command TEXT
 )|]
 
