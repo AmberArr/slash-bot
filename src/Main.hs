@@ -112,7 +112,9 @@ handleEffectful chatId messageId action = case action of
       , T.intercalate " " (Set.toList blacklist)
       ]
   Reply x -> reply' x
-  where reply' = sendTextTo (Tg.SomeChatId chatId) (Just messageId)
+  where
+    reply' = sendTextTo (Tg.SomeChatId chatId) (Just messageId) . prependLTRMark 
+    prependLTRMark x = "\8206" <> x
 
 main :: IO ()
 main = do
