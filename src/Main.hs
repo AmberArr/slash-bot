@@ -58,24 +58,34 @@ handleUpdate update = void $ runMaybeT $ do
 handle1 :: Tg.Update -> Text -> Blacklist -> Maybe Action
 handle1 update botUsername blacklist = flip P.parseUpdate update $ do
   text <- P.text
-  when (T.head text /= '/') $ fail "not a command"
+  let words = T.words $ T.tail $ escape $ stripBotName text
+  case T.head text of
+    '/' -> activeVoiceHandler words
+    '\\' -> passiveVoiceHandler words
+    _ -> fail "not a command"
 
-  case T.words $ T.tail $ escape $ stripBotName text of
-    ("_ping" : _)                      -> pure Ping
-    ("_blacklist" : "add" : xs)        -> pure $ BlackListAdd xs
-    ("_blacklist" : "del" : xs)        -> pure $ BlackListDel xs
-    ["_blacklist"]                     -> pure BlackListList
-    ((T.break (== '@') -> (cmd, botName)) : _)
-      | cmd `Set.member` blacklist || not (T.null botName)
-                                       -> fail ""
-    ["me"]                             -> fail ""
-    ["you"]                            -> fail ""
-    ("me" : (T.unwords -> predicate))  -> pure $ Reply [i|#{sender} #{predicate}！|]
-    ("you" : (T.unwords -> predicate)) -> pure $ Reply [i|#{recipient} #{predicate}！|]
-    [verb]                             -> pure $ Reply [i|#{sender} #{verb} 了 #{recipient}！|]
-    (verb : (T.unwords -> patient))    -> pure $ Reply [i|#{sender} #{verb} #{recipient} #{patient}！|]
-    []                                 -> fail ""
   where
+    activeVoiceHandler words = case words of
+      ("_ping" : _)                      -> pure Ping
+      ("_blacklist" : "add" : xs)        -> pure $ BlackListAdd xs
+      ("_blacklist" : "del" : xs)        -> pure $ BlackListDel xs
+      ["_blacklist"]                     -> pure BlackListList
+      ((T.break (== '@') -> (cmd, botName)) : _)
+        | cmd `Set.member` blacklist || not (T.null botName)
+                                         -> fail ""
+      ["me"]                             -> fail ""
+      ["you"]                            -> fail ""
+      ("me" : (T.unwords -> predicate))  -> pure $ Reply [i|#{sender} #{predicate}！|]
+      ("you" : (T.unwords -> predicate)) -> pure $ Reply [i|#{recipient} #{predicate}！|]
+      [verb]                             -> pure $ Reply [i|#{sender} #{verb} 了 #{recipient}！|]
+      (verb : (T.unwords -> patient))    -> pure $ Reply [i|#{sender} #{verb} #{recipient} #{patient}！|]
+      []                                 -> fail ""
+
+    passiveVoiceHandler words = case words of
+      [verb]                             -> pure $ Reply [i|#{sender} 被 #{recipient} #{verb} 了！|]
+      (verb : (T.unwords -> patient))    -> pure $ Reply [i|#{sender} 被 #{recipient} #{verb}#{patient}！|]
+      []                                 -> fail ""
+
     (sender0, senderId) = fromJust $
       update & (Tg.updateMessage
             >=> Tg.messageFrom
