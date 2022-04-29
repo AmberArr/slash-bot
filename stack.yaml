@@ -1,7 +1,4 @@
-resolver: nightly-2022-01-03
+resolver: lts-19.5
 
 packages:
 - .
-
-# extra-deps:
-# - vendor/telegram-bot-simple
