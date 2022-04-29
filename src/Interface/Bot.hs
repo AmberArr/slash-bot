@@ -28,9 +28,12 @@ sendTextTo chatId messageId text = do
     { Tg.sendMessageChatId = chatId
     , Tg.sendMessageText = text
     , Tg.sendMessageParseMode = parseMode
+    , Tg.sendMessageEntities = Nothing
     , Tg.sendMessageDisableWebPagePreview = Nothing
     , Tg.sendMessageDisableNotification = Nothing
+    , Tg.sendMessageProtectContent = Nothing
     , Tg.sendMessageReplyToMessageId = messageId
+    , Tg.sendMessageAllowSendingWithoutReply = Nothing
     , Tg.sendMessageReplyMarkup = Nothing
     }
 
