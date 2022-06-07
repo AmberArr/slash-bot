@@ -5,6 +5,7 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE TypeApplications #-}
 module Main where
 
 import Control.Arrow ((&&&))
@@ -56,52 +57,76 @@ handleUpdate update = void $ runMaybeT $ do
   lift $ handleEffectful chatId messageId action
 
 handle1 :: Tg.Update -> Text -> Blacklist -> Maybe Action
-handle1 update botUsername blacklist = flip P.parseUpdate update $ do
-  text <- P.text
+handle1 update botUsername blacklist = do
+  text <- P.runUpdateParser P.text update
+
   let words = T.words $ T.tail $ escape $ stripBotName text
+
+  (senderName, senderLinkBuilder) <-
+    update & (Tg.updateMessage >=> getSenderFromMessage)
+
+  (recipientName, recipientLinkBuilder) <-
+    update & (Tg.updateMessage
+          >=> Tg.messageReplyToMessage
+          >=> getSenderFromMessage)
+
+  let sender = maybe "Ta" senderLinkBuilder $ senderName
+      recipient = maybe "自己" recipientLinkBuilder $ recipientName
+
+      activeVoiceHandler words = case words of
+        ("_ping" : _)                      -> pure Ping
+        ("_blacklist" : "add" : xs)        -> pure $ BlackListAdd xs
+        ("_blacklist" : "del" : xs)        -> pure $ BlackListDel xs
+        ["_blacklist"]                     -> pure BlackListList
+        ((T.break (== '@') -> (cmd, botName)) : _)
+          | cmd `Set.member` blacklist || not (T.null botName)
+                                           -> fail ""
+        ["me"]                             -> fail ""
+        ["you"]                            -> fail ""
+        ("me" : (T.unwords -> predicate))  -> pure $ Reply [i|#{sender} #{predicate}！|]
+        ("you" : (T.unwords -> predicate)) -> pure $ Reply [i|#{recipient} #{predicate}！|]
+        [verb]                             -> pure $ Reply [i|#{sender} #{verb} 了 #{recipient}！|]
+        (verb : (T.unwords -> patient))    -> pure $ Reply [i|#{sender} #{verb} #{recipient} #{patient}！|]
+        []                                 -> fail ""
+
+      passiveVoiceHandler words = case words of
+        [verb]                             -> pure $ Reply [i|#{sender} 被 #{recipient} #{verb} 了！|]
+        (verb : (T.unwords -> patient))    -> pure $ Reply [i|#{sender} 被 #{recipient} #{verb}#{patient}！|]
+        []                                 -> fail ""
+
   case T.head text of
     '/' -> activeVoiceHandler words
     '\\' -> passiveVoiceHandler words
     _ -> fail "not a command"
-
   where
-    activeVoiceHandler words = case words of
-      ("_ping" : _)                      -> pure Ping
-      ("_blacklist" : "add" : xs)        -> pure $ BlackListAdd xs
-      ("_blacklist" : "del" : xs)        -> pure $ BlackListDel xs
-      ["_blacklist"]                     -> pure BlackListList
-      ((T.break (== '@') -> (cmd, botName)) : _)
-        | cmd `Set.member` blacklist || not (T.null botName)
-                                         -> fail ""
-      ["me"]                             -> fail ""
-      ["you"]                            -> fail ""
-      ("me" : (T.unwords -> predicate))  -> pure $ Reply [i|#{sender} #{predicate}！|]
-      ("you" : (T.unwords -> predicate)) -> pure $ Reply [i|#{recipient} #{predicate}！|]
-      [verb]                             -> pure $ Reply [i|#{sender} #{verb} 了 #{recipient}！|]
-      (verb : (T.unwords -> patient))    -> pure $ Reply [i|#{sender} #{verb} #{recipient} #{patient}！|]
-      []                                 -> fail ""
-
-    passiveVoiceHandler words = case words of
-      [verb]                             -> pure $ Reply [i|#{sender} 被 #{recipient} #{verb} 了！|]
-      (verb : (T.unwords -> patient))    -> pure $ Reply [i|#{sender} 被 #{recipient} #{verb}#{patient}！|]
-      []                                 -> fail ""
-
-    (sender0, senderId) = fromJust $
-      update & (Tg.updateMessage
-            >=> Tg.messageFrom
-            >=> pure . (Tg.userFirstName &&& Tg.userId))
-    sender = mention senderId sender0
-
-    (recipient0, recipientId) = fromMaybe ("自己", senderId) $
-      update & (Tg.updateMessage
-            >=> Tg.messageReplyToMessage
-            >=> Tg.messageFrom
-            >=> pure . (Tg.userFirstName &&& Tg.userId))
-    recipient = mention recipientId recipient0
-
     stripBotName text = case T.words text of
       ((T.stripSuffix ("@" <> botUsername) -> Just x) : xs) -> T.unwords (x:xs)
       _ -> text
+
+-- return sender name and mention link builder (if it can)
+getSenderFromMessage :: Tg.Message -> Maybe (Maybe Text, Text -> Text)
+getSenderFromMessage msg = do
+  from <- Tg.messageFrom msg
+  Tg.UserId userId <- pure $ Tg.userId from
+  case userId of
+    -- 136817688: if sender is "@Channel_Bot"
+    -- 1087968824: if sender is "@GroupAnonymousBot"
+    x | x == 136817688 || x == 1087968824 -> do
+      senderChat <- Tg.messageSenderChat msg
+      let name = Tg.chatTitle senderChat
+      username <- Tg.chatUsername senderChat
+      pure $ (name, mentionWithUsername username)
+    realUserId -> do
+      name <- pure $ Tg.userFirstName from
+      pure $ (Just name, mentionWithId (Tg.UserId realUserId))
+
+mentionWithId :: Tg.UserId -> Text -> Text
+mentionWithId (Tg.UserId userId) content =
+  "<a href=\"tg://user?id=" <> T.pack (show userId) <> "\">" <> content <> "</a>"
+
+mentionWithUsername :: Text -> Text -> Text
+mentionWithUsername username content =
+  "<a href=\"https://t.me/" <> username <> "\">" <> content <> "</a>"
 
 handleEffectful :: (WithBlacklist m, WithBot r m)
                 => Tg.ChatId -> Tg.MessageId -> Action -> m ()
@@ -152,10 +177,6 @@ startWebhook (Tg.Token token) handler = do
         respond $ responseLBS status200 [] ""
       else
         respond $ responseLBS status404 [] ""
-
-mention :: Tg.UserId -> Text -> Text
-mention (Tg.UserId userId) content =
-  "<a href=\"tg://user?id=" <> T.pack (show userId) <> "\">" <> content <> "</a>"
 
 escape :: Text -> Text
 escape =
