@@ -1,10 +1,13 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE TypeFamilies #-}
 module Bot
        ( Env
+       , BotT(..)
        , BotM(..)
        , runBotM
+       , runBotM_
        , runTgApi
        , runTgApi_
        ) where
@@ -21,12 +24,17 @@ import Interface
 
 type Env = (BotConfig, ClientEnv, DBConn)
 
-newtype BotM a = BotM { unBotM :: ReaderT Env IO a }
+newtype BotT m a = BotM { unBotM :: ReaderT Env m a }
   deriving (Functor, Applicative, Monad, MonadIO, MonadReader Env)
 
-instance MonadBot BotM where
-  getMe = runTgApi_ Tg.getMe
-  sendMessage = runTgApi_ . Tg.sendMessage
+type BotM = BotT ClientM
+
+instance MonadTrans BotT where
+  lift = BotM . lift
+
+instance MonadBot Env BotM where
+  getMe = lift $ fmap Tg.responseResult Tg.getMe
+  sendMessage req = lift $ fmap Tg.responseResult (Tg.sendMessage req)
 
 instance WithBlacklist BotM where
   getBlacklist x = do
@@ -39,8 +47,13 @@ instance WithBlacklist BotM where
     conn <- asks getter
     liftIO $ Db.delBlacklistItem conn x y
 
-runBotM :: BotM a -> Env -> IO a
-runBotM (BotM bot) env = runReaderT bot env
+runBotM :: BotM a -> Env -> IO (Either ClientError a)
+runBotM (BotM bot) env@(_, clientEnv, _) =
+  runClientM (runReaderT bot env) clientEnv
+
+runBotM_ :: BotM a -> Env -> IO a
+runBotM_ bot env =
+  either (error . show) id <$> runBotM bot env
 
 runTgApi :: (Monad m, MonadReader r m, Has ClientEnv r, MonadIO m)
          => ClientM (Tg.Response a) -> m (Either ClientError a)

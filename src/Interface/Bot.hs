@@ -13,15 +13,14 @@ import qualified Telegram.Bot.API as Tg
 
 import Config
 
-type WithBot env m =
-  (MonadBot m, MonadReader env m, Has BotConfig env, Has ClientEnv env)
+type WithBot env m = MonadBot env m
 
-class Monad m => MonadBot m where
+class (Monad m, MonadReader r m, Has BotConfig r) => MonadBot r m where
   getMe :: m Tg.User
   sendMessage :: Tg.SendMessageRequest -> m Tg.Message
 
-sendTextTo :: (MonadBot m, MonadReader r m, Has BotConfig r)
-              => Tg.SomeChatId -> Maybe Tg.MessageId -> Text -> m ()
+sendTextTo :: MonadBot r m
+           => Tg.SomeChatId -> Maybe Tg.MessageId -> Text -> m ()
 sendTextTo chatId messageId text = do
   parseMode <- botCfgParseMode <$> asks getter
   void $ sendMessage Tg.SendMessageRequest
@@ -37,7 +36,7 @@ sendTextTo chatId messageId text = do
     , Tg.sendMessageReplyMarkup = Nothing
     }
 
-reply :: (MonadBot m, MonadReader r m, Has BotConfig r)
+reply :: MonadBot r m
       => Tg.Update -> Text -> m ()
 reply update text = sendTextTo (Tg.SomeChatId chatId) messageId text
   where
