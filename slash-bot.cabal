@@ -35,7 +35,7 @@ executable slash-bot
   hs-source-dirs:   src
   build-depends:
       aeson
-    , base ^>=4.15.0.0
+    , base
     , bytestring
     , containers
     , data-has
