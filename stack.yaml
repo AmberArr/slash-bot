@@ -1,4 +1,5 @@
-resolver: lts-19.5
+# resolver: lts-19.5
+resolver: nightly-2022-06-03
 
 packages:
 - .
