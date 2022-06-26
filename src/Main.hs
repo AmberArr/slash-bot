@@ -67,13 +67,19 @@ handle1 update botUsername blacklist = do
   (senderName, senderLinkBuilder) <-
     update & (Tg.updateMessage >=> getSenderFromMessage)
 
-  (recipientName, recipientLinkBuilder) <-
-    update & (Tg.updateMessage
-          >=> Tg.messageReplyToMessage
-          >=> getSenderFromMessage)
 
   let sender = maybe "Ta" senderLinkBuilder $ senderName
-      recipient = maybe "自己" recipientLinkBuilder $ recipientName
+
+      maybeRecipient =
+        update & (Tg.updateMessage
+              >=> Tg.messageReplyToMessage
+              >=> getSenderFromMessage)
+
+      recipient = case maybeRecipient of
+        Just (Just recipientName, recipientLinkBuilder) ->
+          recipientLinkBuilder recipientName
+        Nothing ->
+          senderLinkBuilder "自己"
 
       activeVoiceHandler words = case words of
         ("_ping" : _)                      -> pure Ping
