@@ -70,4 +70,4 @@ runTgApi client = do
 runTgApi_ :: (Monad m, MonadReader r m, Has ClientEnv r, MonadIO m)
          => ClientM (Tg.Response a) -> m a
 runTgApi_ client = do
-  fmap (either (error . show) id) $ runTgApi client
+  either (error . show) id <$> runTgApi client

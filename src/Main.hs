@@ -50,6 +50,7 @@ mkEnv x y conn = (x, y, conn)
 
 handleUpdate :: (WithBlacklist m, WithBot r m)
              => Tg.Update -> m ()
+{- HLINT ignore handleUpdate -}
 handleUpdate update = void $ runMaybeT $ do
   botUsername <- botCfgUsername <$> asks getter
   chatId <- MaybeT $ pure $ Tg.updateChatId update
@@ -68,7 +69,7 @@ handle1 update botUsername blacklist = do
     update & (Tg.updateMessage >=> getSenderFromMessage)
 
 
-  let sender = maybe "Ta" senderLinkBuilder $ senderName
+  let sender = maybe "Ta" senderLinkBuilder senderName
 
       maybeRecipient =
         update & (Tg.updateMessage
@@ -123,10 +124,10 @@ getSenderFromMessage msg = do
       senderChat <- Tg.messageSenderChat msg
       let name = Tg.chatTitle senderChat
       username <- Tg.chatUsername senderChat
-      pure $ (name, mentionWithUsername username)
+      pure (name, mentionWithUsername username)
     realUserId -> do
-      name <- pure $ Tg.userFirstName from
-      pure $ (Just name, mentionWithId (Tg.UserId realUserId))
+      let name = Tg.userFirstName from
+      pure (Just name, mentionWithId (Tg.UserId realUserId))
 
 mentionWithId :: Tg.UserId -> Text -> Text
 mentionWithId (Tg.UserId userId) content =
@@ -156,7 +157,7 @@ handleEffectful chatId messageId action = case action of
       ]
   Reply x -> reply' x
   where
-    reply' = sendTextTo (Tg.SomeChatId chatId) (Just messageId) . prependLTRMark 
+    reply' = sendTextTo (Tg.SomeChatId chatId) (Just messageId) . prependLTRMark
     prependLTRMark x = "\8206" <> x
 
 main :: IO ()
@@ -201,7 +202,7 @@ startPolling handleUpdate = go Nothing
           mapM_ handleUpdate updates
           pure maxUpdateId
       liftIO $ threadDelay 1000000
-      go nextUpdateId  
+      go nextUpdateId
 
 startWebhook :: Tg.Token -> (Tg.Update -> IO ()) -> IO ()
 startWebhook (Tg.Token token) handler = do
@@ -220,3 +221,4 @@ escape =
     T.replace "&" "&amp;"
   . T.replace "<" "&lt;"
   . T.replace ">" "&gt;"
+

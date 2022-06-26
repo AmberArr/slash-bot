@@ -19,6 +19,7 @@ class (Monad m, MonadReader r m, Has BotConfig r) => MonadBot r m where
   getMe :: m Tg.User
   sendMessage :: Tg.SendMessageRequest -> m Tg.Message
 
+{- HLINT ignore sendTextTo -}
 sendTextTo :: MonadBot r m
            => Tg.SomeChatId -> Maybe Tg.MessageId -> Text -> m ()
 sendTextTo chatId messageId text = do
