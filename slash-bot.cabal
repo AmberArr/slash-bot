@@ -54,4 +54,5 @@ executable slash-bot
     , text
     , transformers
     , vector
+    , monad-control
   default-language: Haskell2010

@@ -29,6 +29,8 @@ import Servant.Client
 import System.Environment
 import qualified Telegram.Bot.API as Tg
 import qualified Telegram.Bot.Simple.UpdateParser as P
+import Control.Monad.Except
+import Control.Monad.Trans.Control
 
 import Bot
 import Config
@@ -153,6 +155,7 @@ handleEffectful chatId messageId action = case action of
 
 main :: IO ()
 main = do
+  polling <- isJust <$> lookupEnv "POLLING"
   token <- Tg.Token . T.pack <$> getEnv "TOKEN"
   clientEnv <- Tg.defaultTelegramClientEnv token
   Just botUsername <- Tg.userUsername <$>
@@ -161,10 +164,38 @@ main = do
   dburl <- BC.pack <$> getEnv "DATABASE_URL"
   withDBConn dburl $ \conn -> do
     mkTable conn
-    startWebhook token $ \update -> runBotM
-      (handleUpdate update)
-      (mkEnv (BotConfig (Just Tg.HTML) botUsername) clientEnv conn)
+    let env = mkEnv (BotConfig (Just Tg.HTML) botUsername) clientEnv conn
+    if polling
+      then flip runBotM_ env $ startPolling' handleUpdate
+      else startWebhook token $ flip runBotM_ env . handleUpdate
 
+startPolling' :: (Tg.Update -> BotM a) -> BotM a
+startPolling' handler =
+  controlT (\run -> startPolling $ run . handler)
+
+startPolling :: (Tg.Update -> ClientM a) -> ClientM a
+startPolling handleUpdate = go Nothing
+  where
+    go lastUpdateId = do
+      let inc (Tg.UpdateId n) = Tg.UpdateId (n + 1)
+          offset = fmap inc lastUpdateId
+      res <-
+        (Right <$> Tg.getUpdates
+          (Tg.GetUpdatesRequest offset Nothing Nothing Nothing))
+        `catchError` (pure . Left)
+
+      nextUpdateId <- case res of
+        Left servantErr -> do
+          liftIO (print servantErr)
+          pure lastUpdateId
+        Right result -> do
+          let updates = Tg.responseResult result
+              updateIds = map Tg.updateUpdateId updates
+              maxUpdateId = maximum (Nothing : map Just updateIds)
+          mapM_ handleUpdate updates
+          pure maxUpdateId
+      liftIO $ threadDelay 1000000
+      go nextUpdateId  
 
 startWebhook :: Tg.Token -> (Tg.Update -> IO ()) -> IO ()
 startWebhook (Tg.Token token) handler = do

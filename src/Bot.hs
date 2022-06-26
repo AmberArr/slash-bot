@@ -13,6 +13,7 @@ module Bot
        ) where
 
 import Control.Monad.Reader
+import Control.Monad.Trans.Control
 import Data.Has
 import qualified Data.Set as Set
 import Servant.Client
@@ -35,6 +36,11 @@ instance MonadTrans BotT where
 instance MonadBot Env BotM where
   getMe = lift $ fmap Tg.responseResult Tg.getMe
   sendMessage req = lift $ fmap Tg.responseResult (Tg.sendMessage req)
+
+instance MonadTransControl BotT where
+  type StT BotT a = a
+  liftWith = defaultLiftWith BotM unBotM
+  restoreT = defaultRestoreT BotM
 
 instance WithBlacklist BotM where
   getBlacklist x = do
