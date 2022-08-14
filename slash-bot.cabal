@@ -41,6 +41,7 @@ executable slash-bot
     , data-has
     , deepseq
     , fast-logger
+    , http-conduit
     , http-types
     , megaparsec
     , mtl
