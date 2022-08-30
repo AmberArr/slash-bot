@@ -10,7 +10,7 @@
 {-# LANGUAGE TypeApplications #-}
 module Main where
 
-import Control.Arrow ((&&&), second)
+import Control.Arrow ((>>>), (&&&), second)
 import Control.Concurrent
 import Control.Monad
 import Control.Monad.Reader
@@ -25,6 +25,7 @@ import Data.String.Interpolate (i)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T (decodeUtf8)
+import qualified Data.Text.Lazy as LT
 import Network.HTTP.Types
 import Network.Wai
 import Network.Wai.Handler.Warp as Warp
@@ -35,6 +36,9 @@ import qualified Telegram.Bot.Simple.UpdateParser as P
 import Control.Monad.Except
 import Control.Monad.Trans.Control
 import Network.HTTP.Simple
+import Control.Lens
+import Text.XML.Lens
+import qualified Text.HTML.DOM as HTML
 
 import Bot
 import Config
@@ -132,14 +136,18 @@ fetchFirstName :: MonadIO m => Text -> m Text
 fetchFirstName username = do
   let req = parseRequest_ $ T.unpack $ toTgUserWebLink username
   resp <- liftIO $ httpBS req
-  pure $ extractFromHTML $ T.decodeUtf8 $ getResponseBody resp
+  pure $ extractNameFromHTML $ T.decodeUtf8 $ getResponseBody resp
 
-extractFromHTML :: Text -> Text
-extractFromHTML =
-    unescape
-  . T.takeWhile (/= '<')
-  . snd
-  . T.breakOnEnd "<div class=\"tgme_page_title\"><span dir=\"auto\">"
+extractNameFromHTML :: Text -> Text
+extractNameFromHTML htmlText = html ^. lens
+  where
+    html = HTML.parseLT $ LT.fromStrict htmlText
+    lens =
+      root
+      . cosmos
+      . attributeIs "class" "tgme_page_title"
+      ... named "span"
+      . text
 
 actionRoute :: Maybe CmdInfo -> Blacklist -> Maybe Action
 actionRoute Nothing _ = Nothing

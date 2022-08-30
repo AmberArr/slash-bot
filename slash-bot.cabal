@@ -56,4 +56,7 @@ executable slash-bot
     , transformers
     , vector
     , monad-control
+    , html-conduit
+    , xml-lens
+    , lens
   default-language: Haskell2010
