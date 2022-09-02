@@ -44,6 +44,7 @@ import Bot
 import Config
 import Db (DBConn, mkTable, withDBConn)
 import Interface
+import Parser
 
 data Action =
     Ping
@@ -52,14 +53,6 @@ data Action =
   | BlackListList
   | Reply !Text
   deriving (Show, Eq)
-
-data CmdInfo = CmdInfo
-  { cmd :: Text
-  , sender :: Text
-  , recipient :: Text
-  , remainder :: [Text]
-  , isActiveVoice :: Bool
-  } deriving (Show, Eq)
 
 mkEnv :: BotConfig -> ClientEnv -> DBConn -> Env
 mkEnv x y conn = (x, y, conn)
@@ -78,76 +71,6 @@ handleUpdate update = void $ runMaybeT $ do
 
 hoistMaybe :: Monad m => Maybe a -> MaybeT m a
 hoistMaybe = MaybeT . pure
-
-liftMaybe :: MonadError () m => Maybe a -> m a
-liftMaybe = maybe (throwError ()) pure
-
-parseUpdate :: (MonadError () m, MonadIO m) => Tg.Update -> Text -> m CmdInfo
-parseUpdate update botUsername = do
-  text <- liftMaybe $ P.runUpdateParser P.text update
-  isActiveVoice <- case T.head text of
-    '/' -> pure True
-    '\\' -> pure False
-    _ -> throwError ()
-
-  let words = T.words $ T.tail $ escape text
-  ((cmd, username0), remainder0) <- case words of
-    [] -> throwError ()
-    (head : tail) -> pure (splitAtAt head, tail)
-
-  -- It's kinda dumb. But whatever, it works.
-  let checkSecondWord = \case
-        (secondWord : rem) | "@" `T.isPrefixOf` secondWord ->
-          let username = T.tail secondWord
-           in (\x -> (Just x, username, rem)) <$> fetchFirstName username
-        _ ->
-          pure (Nothing, username0, remainder0)
-
-  (maybeRecipient0, username, remainder) <- if
-    | T.null username0 ->
-        checkSecondWord remainder0
-    | username0 == botUsername ->
-        checkSecondWord remainder0
-    | "bot" `T.isSuffixOf` T.toLower username0 ->
-        throwError ()
-    | otherwise ->
-        (\x -> (Just x, username0, remainder0)) <$> fetchFirstName username0
-
-  liftMaybe $ do
-    (senderName, senderLinkBuilder) <-
-      update & (Tg.updateMessage >=> getSenderFromMessage)
-
-    let sender = maybe "Ta" senderLinkBuilder senderName
-        f = \x -> (Just x, mentionWithUsername username)
-        maybeRecipient = msum
-          [ fmap f maybeRecipient0
-          , update & (Tg.updateMessage
-                  >=> Tg.messageReplyToMessage
-                  >=> getSenderFromMessage)
-          ]
-        recipient = case maybeRecipient of
-          Just (Just recipientName, recipientLinkBuilder) ->
-            recipientLinkBuilder recipientName
-          _ ->
-            senderLinkBuilder "自己"
-    pure CmdInfo{..}
-
-fetchFirstName :: MonadIO m => Text -> m Text
-fetchFirstName username = do
-  let req = parseRequest_ $ T.unpack $ toTgUserWebLink username
-  resp <- liftIO $ httpBS req
-  pure $ extractNameFromHTML $ T.decodeUtf8 $ getResponseBody resp
-
-extractNameFromHTML :: Text -> Text
-extractNameFromHTML htmlText = html ^. lens
-  where
-    html = HTML.parseLT $ LT.fromStrict htmlText
-    lens =
-      root
-      . cosmos
-      . attributeIs "class" "tgme_page_title"
-      ... named "span"
-      . text
 
 actionRoute :: Maybe CmdInfo -> Blacklist -> Maybe Action
 actionRoute Nothing _ = Nothing
@@ -172,37 +95,6 @@ actionRoute (Just CmdInfo{..}) blacklist = do
     passiveVoiceHandler = \case
       (verb, [])                      -> pure $ Reply [i|#{sender} 被 #{recipient} #{verb} 了！|]
       (verb , T.unwords -> patient)   -> pure $ Reply [i|#{sender} 被 #{recipient} #{verb}#{patient}！|]
-
--- return sender name and mention link builder (if it can)
-getSenderFromMessage :: Tg.Message -> Maybe (Maybe Text, Text -> Text)
-getSenderFromMessage msg = do
-  from <- Tg.messageFrom msg
-  Tg.UserId userId <- pure $ Tg.userId from
-  case userId of
-    -- 136817688: if sender is "@Channel_Bot"
-    -- 1087968824: if sender is "@GroupAnonymousBot"
-    x | x == 136817688 || x == 1087968824 -> do
-      senderChat <- Tg.messageSenderChat msg
-      let name = Tg.chatTitle senderChat
-      username <- Tg.chatUsername senderChat
-      pure (name, mentionWithUsername username)
-    realUserId -> do
-      let name = Tg.userFirstName from
-      pure (Just name, mentionWithId (Tg.UserId realUserId))
-
-mentionWithId :: Tg.UserId -> Text -> Text
-mentionWithId (Tg.UserId userId) content =
-  [i|<a href="tg://user?id=#{userId}">#{content}</a>|]
-
-mentionWithUsername :: Text -> Text -> Text
-mentionWithUsername username content =
-  [i|<a href="#{toTgUserLink username}">#{content}</a>|]
-
-toTgUserLink :: Text -> Text
-toTgUserLink username = "tg://resolve?domain=" <> username
-
-toTgUserWebLink :: Text -> Text
-toTgUserWebLink username = "https://t.me/" <> username
 
 handleEffectful :: (WithBlacklist m, WithBot r m)
                 => Tg.ChatId -> Tg.MessageId -> Action -> m ()
@@ -283,29 +175,7 @@ startWebhook (Tg.Token token) handler = do
       else
         respond $ responseLBS status404 [] ""
 
-escape :: Text -> Text
-escape =
-    T.replace "&" "&amp;"
-  . T.replace "<" "&lt;"
-  . T.replace ">" "&gt;"
-  . T.replace "\"" "&quot;"
-  . T.replace "'"  "&#39;"
-
-unescape :: Text -> Text
-unescape =
-    T.replace "&amp;"   "&"
-  . T.replace "&lt;"    "<"
-  . T.replace "&gt;"    ">"
-  . T.replace "&quot;"  "\""
-  . T.replace "&#39;"   "'"
 
 eitherToMaybe :: Either e a -> Maybe a
 eitherToMaybe (Left _) = Nothing
 eitherToMaybe (Right a) = Just a
-
-splitAtAt :: Text -> (Text, Text)
-splitAtAt text =
-  case T.break (== '@') text of
-    (x, y) | "@" `T.isPrefixOf` y -> (x, T.tail y)
-    x -> x
-
