@@ -3,23 +3,19 @@
 {-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
-module Parser where
 module Parser
   ( CmdInfo(..)
   , parseUpdate
   ) where
 
-import Control.Lens
+import Control.Lens ((^.), (&), (...), cosmos)
 import Control.Monad
 import Control.Monad.Except
-import Control.Monad.Reader
-import Control.Monad.Trans.Control
-import Data.Function
 import Data.Maybe
 import Data.String.Interpolate (i)
 import Data.Text (Text)
-import Network.HTTP.Simple
-import Text.XML.Lens
+import Network.HTTP.Simple (httpBS, getResponseBody, parseRequest_)
+import Text.XML.Lens (attributeIs, named, root, text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T (decodeUtf8)
 import qualified Data.Text.Lazy as LT

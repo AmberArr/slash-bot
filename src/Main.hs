@@ -25,7 +25,6 @@ import Data.String.Interpolate (i)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T (decodeUtf8)
-import qualified Data.Text.Lazy as LT
 import Network.HTTP.Types
 import Network.Wai
 import Network.Wai.Handler.Warp as Warp
@@ -36,9 +35,6 @@ import qualified Telegram.Bot.Simple.UpdateParser as P
 import Control.Monad.Except
 import Control.Monad.Trans.Control
 import Network.HTTP.Simple
-import Control.Lens
-import Text.XML.Lens
-import qualified Text.HTML.DOM as HTML
 
 import Bot
 import Config
