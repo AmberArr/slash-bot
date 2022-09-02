@@ -11,6 +11,8 @@ module Parser
 import Control.Lens ((^.), (&), (...), cosmos)
 import Control.Monad
 import Control.Monad.Except
+import Data.Function (on)
+import Data.List (sortBy)
 import Data.Maybe
 import Data.String.Interpolate (i)
 import Data.Text (Text)
@@ -43,6 +45,7 @@ parseUpdate update botUsername = do
 
   let words0 = T.words $ T.tail $ escape text
   words1 <- handleTargetUsername botUsername words0
+  text <- pure $ replaceTextMention update text
 
   let (isAltSubject, isAltRecipient) = case words1 of
         (firstWord : _)      | "@" `T.isPrefixOf` firstWord  -> (True, False)
@@ -76,6 +79,31 @@ parseUpdate update botUsername = do
                   (_, Just x) -> x
                   _ -> subjectLinkBuilder "自己"
     pure CmdInfo{..}
+
+replaceTextMention :: Tg.Update -> Text -> Text
+replaceTextMention update text =
+  case Tg.messageEntities =<< Tg.extractUpdateMessage update of
+    Nothing -> text
+    Just [] -> text
+    Just xs ->
+      let entities = flip filter xs $ \entity ->
+            Tg.messageEntityType entity == Tg.MessageEntityTextMention
+          sortDescOnOffset = sortBy (flip compare `on` Tg.messageEntityOffset)
+       in replacing (sortDescOnOffset entities) text
+  where
+    replacing :: [Tg.MessageEntity] -> Text -> Text
+    replacing [] text = text
+    replacing (Tg.MessageEntity{..} : xs) text = do
+      let offset = messageEntityOffset
+          length = messageEntityLength
+          Tg.User{..} = fromJust messageEntityUser
+          text' = replace offset length (mentionWithId userId userFirstName) text
+       in replacing xs text'
+      where
+        replace idx length target text =
+          let (a, b) = T.splitAt idx text
+              (c, d) = T.splitAt length b
+           in a <> target <> d
 
 handleTargetUsername :: MonadError () m => Text -> [Text] -> m [Text]
 handleTargetUsername botUsername words = do
