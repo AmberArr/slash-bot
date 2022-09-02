@@ -88,13 +88,14 @@ actionRoute (Just CmdInfo{..}) blacklist = do
         | cmd `Set.member` blacklist  -> fail ""
       ("me", [])                      -> fail ""
       ("you", [])                     -> fail ""
-      ("me", T.unwords -> predicate)  -> pure $ Reply [i|#{sender} #{predicate}！|]
+      ("me", T.unwords -> predicate)  -> pure $ Reply [i|#{subject} #{predicate}！|]
       ("you", T.unwords -> predicate) -> pure $ Reply [i|#{recipient} #{predicate}！|]
-      (verb, [])                      -> pure $ Reply [i|#{sender} #{verb} 了 #{recipient}！|]
-      (verb, T.unwords -> patient)    -> pure $ Reply [i|#{sender} #{verb} #{recipient} #{patient}！|]
+      (_, words) | isAltSubject       -> pure $ Reply $ T.unwords (subject : words) <> "！"
+      (verb, [])                      -> pure $ Reply [i|#{subject} #{verb} 了 #{recipient}！|]
+      (verb, T.unwords -> patient)    -> pure $ Reply [i|#{subject} #{verb} #{recipient} #{patient}！|]
     passiveVoiceHandler = \case
-      (verb, [])                      -> pure $ Reply [i|#{sender} 被 #{recipient} #{verb} 了！|]
-      (verb , T.unwords -> patient)   -> pure $ Reply [i|#{sender} 被 #{recipient} #{verb}#{patient}！|]
+      (verb, [])                      -> pure $ Reply [i|#{subject} 被 #{recipient} #{verb} 了！|]
+      (verb , T.unwords -> patient)   -> pure $ Reply [i|#{subject} 被 #{recipient} #{verb}#{patient}！|]
 
 handleEffectful :: (WithBlacklist m, WithBot r m)
                 => Tg.ChatId -> Tg.MessageId -> Action -> m ()

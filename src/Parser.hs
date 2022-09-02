@@ -4,6 +4,10 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 module Parser where
+module Parser
+  ( CmdInfo(..)
+  , parseUpdate
+  ) where
 
 import Control.Lens
 import Control.Monad
@@ -11,6 +15,7 @@ import Control.Monad.Except
 import Control.Monad.Reader
 import Control.Monad.Trans.Control
 import Data.Function
+import Data.Maybe
 import Data.String.Interpolate (i)
 import Data.Text (Text)
 import Network.HTTP.Simple
@@ -24,12 +29,14 @@ import qualified Text.HTML.DOM as HTML
 
 data CmdInfo = CmdInfo
   { cmd :: Text
-  , sender :: Text
+  , subject :: Text
   , recipient :: Text
   , remainder :: [Text]
   , isActiveVoice :: Bool
+  , isAltSubject :: Bool
   } deriving (Show, Eq)
 
+-- sorry for my s**t code
 parseUpdate :: (MonadError () m, MonadIO m) => Tg.Update -> Text -> m CmdInfo
 parseUpdate update botUsername = do
   text <- liftMaybe $ P.runUpdateParser P.text update
@@ -38,50 +45,70 @@ parseUpdate update botUsername = do
     '\\' -> pure False
     _ -> throwError ()
 
-  let words = T.words $ T.tail $ escape text
-  ((cmd, username0), remainder0) <- case words of
-    [] -> throwError ()
-    (head : tail) -> pure (splitAtAt head, tail)
+  let words0 = T.words $ T.tail $ escape text
+  words1 <- handleTargetUsername botUsername words0
 
-  -- It's kinda dumb. But whatever, it works.
-  let checkSecondWord = \case
-        (secondWord : rem) | "@" `T.isPrefixOf` secondWord ->
-          let username = T.tail secondWord
-           in (\x -> (Just x, username, rem)) <$> fetchFirstName username
-        _ ->
-          pure (Nothing, username0, remainder0)
-
-  (maybeRecipient0, username, remainder) <- if
-    | T.null username0 ->
-        checkSecondWord remainder0
-    | username0 == botUsername ->
-        checkSecondWord remainder0
-    | "bot" `T.isSuffixOf` T.toLower username0 ->
-        throwError ()
-    | otherwise ->
-        (\x -> (Just x, username0, remainder0)) <$> fetchFirstName username0
+  let (isAltSubject, isAltRecipient) = case words1 of
+        (firstWord : _)      | "@" `T.isPrefixOf` firstWord  -> (True, False)
+        (_ : secondWord : _) | "@" `T.isPrefixOf` secondWord -> (False, True)
+        _ -> (False, False)
+  words <- traverse tryConvertMentionToLink words1
+  (cmd, altSubject, altRecipient, remainder) <-
+    case (words, isAltSubject, isAltRecipient) of
+      (x:y,   True, _)    -> pure ("", Just x,  Nothing, y)
+      (x:y:z, _,    True) -> pure (x,  Nothing, Just y,  z)
+      (x:y,   _,    _)    -> pure (x,  Nothing, Nothing, y)
+      _ -> throwError ()
 
   liftMaybe $ do
-    (senderName, senderLinkBuilder) <-
+    (subjectName, subjectLinkBuilder) <-
       update & (Tg.updateMessage >=> getSenderFromMessage)
 
-    let sender = maybe "Ta" senderLinkBuilder senderName
-        f = \x -> (Just x, mentionWithUsername username)
-        maybeRecipient = msum
-          [ fmap f maybeRecipient0
-          , update & (Tg.updateMessage
-                  >=> Tg.messageReplyToMessage
-                  >=> getSenderFromMessage)
+    let subject = maybe "Ta" subjectLinkBuilder $ msum
+          [ altSubject
+          , subjectName
           ]
+        maybeRecipient =
+          update & (Tg.updateMessage
+                >=> Tg.messageReplyToMessage
+                >=> getSenderFromMessage)
         recipient = case maybeRecipient of
           Just (Just recipientName, recipientLinkBuilder) ->
             recipientLinkBuilder recipientName
-          _ ->
-            senderLinkBuilder "自己"
+          _ -> case (isAltSubject, altRecipient) of
+                  (True, _)   -> T.empty
+                  (_, Just x) -> x
+                  _ -> subjectLinkBuilder "自己"
     pure CmdInfo{..}
 
-fetchFirstName :: MonadIO m => Text -> m Text
-fetchFirstName username = do
+handleTargetUsername :: MonadError () m => Text -> [Text] -> m [Text]
+handleTargetUsername botUsername words = do
+  ((cmd, username), remainder) <- case words of
+    (head : tail) -> pure (splitAtAt head, tail)
+    [] -> throwError ()
+  let atUsername = T.cons '@' username
+  if
+    | T.null username || username == botUsername ->
+        pure (cmd : remainder)
+    | "bot" `T.isSuffixOf` T.toLower username ->
+        throwError ()
+    | T.null cmd ->
+        pure (atUsername : remainder)
+    | otherwise ->
+        pure (cmd : atUsername : remainder)
+
+tryConvertMentionToLink :: MonadIO m => Text -> m Text
+tryConvertMentionToLink word =
+  if "@" `T.isPrefixOf` word
+     then fetch (T.tail word)
+     else pure word
+  where
+    fetch username = do
+      name <- fetchName username
+      pure $ mentionWithUsername username name
+
+fetchName :: MonadIO m => Text -> m Text
+fetchName username = do
   let req = parseRequest_ $ T.unpack $ toTgUserWebLink username
   resp <- liftIO $ httpBS req
   pure $ extractNameFromHTML $ T.decodeUtf8 $ getResponseBody resp
