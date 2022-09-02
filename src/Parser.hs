@@ -84,12 +84,14 @@ handleTargetUsername botUsername words = do
     [] -> throwError ()
   let atUsername = T.cons '@' username
   if
+    | T.null cmd && T.null username ->
+        throwError ()
+    | T.null cmd ->
+        pure (atUsername : remainder)
     | T.null username || username == botUsername ->
         pure (cmd : remainder)
     | "bot" `T.isSuffixOf` T.toLower username ->
         throwError ()
-    | T.null cmd ->
-        pure (atUsername : remainder)
     | otherwise ->
         pure (cmd : atUsername : remainder)
 
