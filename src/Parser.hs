@@ -12,6 +12,7 @@ module Parser
 import Control.Lens ((^.), (&), (...), cosmos)
 import Control.Monad
 import Control.Monad.Except
+import Control.Monad.State
 import Data.Function (on)
 import Data.List (sortOn)
 import Data.Maybe
@@ -33,6 +34,7 @@ data CmdInfo = CmdInfo
   , remainder :: [Text]
   , isActiveVoice :: Bool
   , isAltSubject :: Bool
+  , isIgnoreBlacklist :: Bool
   } deriving (Show, Eq)
 
 -- sorry for my s**t code
@@ -45,7 +47,8 @@ parseUpdate update botUsername = do
     _ -> throwError ()
 
   frags <- pure $ breakText update $ T.tail $ escape text
-  frags <- handleTargetUsername botUsername frags
+  (frags, isIgnoreBlacklist) <-
+    flip runStateT False $ handleTargetUsername botUsername frags
   let (isAltSubject, isAltRecipient) = case frags of
         (x: _)    | isMention x -> (True, False)
         (_: y: _) | isMention y -> (False, True)
@@ -139,7 +142,9 @@ extractTextMention update text =
           )
 
 handleTargetUsername ::
-     MonadError () m
+  ( MonadError () m
+  , MonadState Bool m -- isIgnoreBlacklist
+  )
   => Text
   -> [TextFragment]
   -> m [TextFragment]
@@ -151,7 +156,7 @@ handleTargetUsername botUsername (PlainText x : remainder) = do
     | T.null cmd ->
         pure (Mention username : remainder)
     | T.null username || username == botUsername ->
-        pure (PlainText cmd : remainder)
+        put True >> pure (PlainText cmd : remainder)
     | "bot" `T.isSuffixOf` T.toLower username ->
         throwError ()
     | otherwise ->

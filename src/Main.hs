@@ -81,7 +81,8 @@ actionRoute (Just CmdInfo{..}) blacklist = do
       ("_blacklist", "del" : xs)      -> pure $ BlackListDel xs
       ("_blacklist", [])              -> pure BlackListList
       (cmd, _)
-        | cmd `Set.member` blacklist  -> fail ""
+        | not isIgnoreBlacklist
+        && cmd `Set.member` blacklist -> fail ""
       ("me", [])                      -> fail ""
       ("you", [])                     -> fail ""
       ("me", T.unwords -> predicate)  -> pure $ Reply [i|#{subject} #{predicate}！|]
