@@ -12,7 +12,7 @@ import Control.Lens ((^.), (&), (...), cosmos)
 import Control.Monad
 import Control.Monad.Except
 import Data.Function (on)
-import Data.List (sortBy)
+import Data.List (sortOn)
 import Data.Maybe
 import Data.String.Interpolate (i)
 import Data.Text (Text)
@@ -43,20 +43,18 @@ parseUpdate update botUsername = do
     '\\' -> pure False
     _ -> throwError ()
 
-  let words0 = T.words $ T.tail $ escape text
-  words1 <- handleTargetUsername botUsername words0
-  text <- pure $ replaceTextMention update text
-
-  let (isAltSubject, isAltRecipient) = case words1 of
-        (firstWord : _)      | "@" `T.isPrefixOf` firstWord  -> (True, False)
-        (_ : secondWord : _) | "@" `T.isPrefixOf` secondWord -> (False, True)
+  frags <- pure $ breakText update $ T.tail $ escape text
+  frags <- handleTargetUsername botUsername frags
+  let (isAltSubject, isAltRecipient) = case frags of
+        (x: _)    | isMention x -> (True, False)
+        (_: y: _) | isMention y -> (False, True)
         _ -> (False, False)
-  words <- traverse tryConvertMentionToLink words1
+  words <- traverse tryConvertMentionToLink frags
   (cmd, altSubject, altRecipient, remainder) <-
     case (words, isAltSubject, isAltRecipient) of
-      (x:y,   True, _)    -> pure ("", Just x,  Nothing, y)
-      (x:y:z, _,    True) -> pure (x,  Nothing, Just y,  z)
-      (x:y,   _,    _)    -> pure (x,  Nothing, Nothing, y)
+      (  x:y, True,    _) -> pure ("",  Just x, Nothing, y)
+      (x:y:z,    _, True) -> pure ( x, Nothing,  Just y, z)
+      (  x:y,    _,    _) -> pure ( x, Nothing, Nothing, y)
       _ -> throwError ()
 
   liftMaybe $ do
@@ -80,58 +78,93 @@ parseUpdate update botUsername = do
                   _ -> subjectLinkBuilder "自己"
     pure CmdInfo{..}
 
-replaceTextMention :: Tg.Update -> Text -> Text
-replaceTextMention update text =
+data TextFragment =
+    PlainText !Text
+  | Mention !Text
+  | TextMention !Tg.UserId !Text
+  deriving (Eq, Show)
+
+isMention :: TextFragment -> Bool
+isMention = \case
+  PlainText _     -> False
+  Mention _       -> True
+  TextMention _ _ -> True
+
+breakText :: Tg.Update -> Text -> [TextFragment]
+breakText update text = do
+  let frags = extractTextMention update text
+  flip concatMap frags $ \case
+    PlainText x -> extractMention <$> T.words x
+    x -> [x]
+
+extractMention :: Text -> TextFragment
+extractMention x =
+  if "@" `T.isPrefixOf` x
+     then Mention (T.tail x)
+     else PlainText x
+
+getTextMentionEntities :: Tg.Update -> [Tg.MessageEntity]
+getTextMentionEntities update =
   case Tg.messageEntities =<< Tg.extractUpdateMessage update of
-    Nothing -> text
-    Just [] -> text
+    Nothing -> []
+    Just [] -> []
+    Just xs ->
+      flip filter xs $ \entity ->
+        Tg.messageEntityType entity == Tg.MessageEntityTextMention
+
+extractTextMention :: Tg.Update -> Text -> [TextFragment]
+extractTextMention update text =
+  case Tg.messageEntities =<< Tg.extractUpdateMessage update of
+    Nothing -> [PlainText text]
+    Just [] -> [PlainText text]
     Just xs ->
       let entities = flip filter xs $ \entity ->
             Tg.messageEntityType entity == Tg.MessageEntityTextMention
-          sortDescOnOffset = sortBy (flip compare `on` Tg.messageEntityOffset)
-       in replacing (sortDescOnOffset entities) text
+          sortOnOffset = sortOn Tg.messageEntityOffset
+       in replacing entities 1 text -- 1 since the initial slash is striped
   where
-    replacing :: [Tg.MessageEntity] -> Text -> Text
-    replacing [] text = text
-    replacing (Tg.MessageEntity{..} : xs) text = do
+    replacing :: [Tg.MessageEntity] -> Int -> Text -> [TextFragment]
+    replacing [] _idx text = [PlainText text]
+    replacing (Tg.MessageEntity{..} : xs) idx text = do
       let offset = messageEntityOffset
           length = messageEntityLength
           Tg.User{..} = fromJust messageEntityUser
-          text' = replace offset length (mentionWithId userId userFirstName) text
-       in replacing xs text'
-      where
-        replace idx length target text =
-          let (a, b) = T.splitAt idx text
-              (c, d) = T.splitAt length b
-           in a <> target <> d
+          (a, b) = T.splitAt (offset - idx) text
+          (c, d) = T.splitAt length b
 
-handleTargetUsername :: MonadError () m => Text -> [Text] -> m [Text]
-handleTargetUsername botUsername words = do
-  ((cmd, username), remainder) <- case words of
-    (head : tail) -> pure (splitAtAt head, tail)
-    [] -> throwError ()
-  let atUsername = T.cons '@' username
+       in ( PlainText a
+          : TextMention userId c
+          : replacing xs (idx + offset + length) d
+          )
+
+handleTargetUsername ::
+     MonadError () m
+  => Text
+  -> [TextFragment]
+  -> m [TextFragment]
+handleTargetUsername botUsername (PlainText x : remainder) = do
+  let (cmd, username) = splitAtAt x
   if
     | T.null cmd && T.null username ->
         throwError ()
     | T.null cmd ->
-        pure (atUsername : remainder)
+        pure (Mention username : remainder)
     | T.null username || username == botUsername ->
-        pure (cmd : remainder)
+        pure (PlainText cmd : remainder)
     | "bot" `T.isSuffixOf` T.toLower username ->
         throwError ()
     | otherwise ->
-        pure (cmd : atUsername : remainder)
+        pure (PlainText cmd : Mention username : remainder)
+handleTargetUsername _ [] = throwError ()
+handleTargetUsername _ x = pure x
 
-tryConvertMentionToLink :: MonadIO m => Text -> m Text
-tryConvertMentionToLink word =
-  if "@" `T.isPrefixOf` word
-     then fetch (T.tail word)
-     else pure word
-  where
-    fetch username = do
-      name <- fetchName username
-      pure $ mentionWithUsername username name
+tryConvertMentionToLink :: MonadIO m => TextFragment -> m Text
+tryConvertMentionToLink = \case
+  PlainText x -> pure x
+  TextMention userId name -> pure $ mentionWithId userId name
+  Mention username -> do
+    name <- fetchName username
+    pure $ mentionWithUsername username name
 
 fetchName :: MonadIO m => Text -> m Text
 fetchName username = do
