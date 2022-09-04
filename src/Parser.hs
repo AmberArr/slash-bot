@@ -155,7 +155,9 @@ handleTargetUsername botUsername (PlainText x : remainder) = do
         throwError ()
     | T.null cmd ->
         pure (Mention username : remainder)
-    | T.null username || username == botUsername ->
+    | T.null username ->
+        pure (PlainText cmd : remainder)
+    | username == botUsername ->
         put True >> pure (PlainText cmd : remainder)
     | "bot" `T.isSuffixOf` T.toLower username ->
         throwError ()
