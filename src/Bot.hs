@@ -58,9 +58,12 @@ runBotM :: BotM a -> Env -> IO (Either ClientError a)
 runBotM (BotM bot) env@(_, clientEnv, _) =
   runClientM (runReaderT bot env) clientEnv
 
-runBotM_ :: BotM a -> Env -> IO a
-runBotM_ bot env =
-  either (error . show) id <$> runBotM bot env
+runBotM_ :: BotM a -> Env -> IO ()
+runBotM_ bot env = do
+  result <- runBotM bot env
+  case result of
+    Left e -> print e
+    _ -> pure ()
 
 runTgApi :: (Monad m, MonadReader r m, Has ClientEnv r, MonadIO m)
          => ClientM (Tg.Response a) -> m (Either ClientError a)
