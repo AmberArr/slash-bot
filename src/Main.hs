@@ -130,12 +130,12 @@ main = do
     mkTable conn
     let env = mkEnv (BotConfig (Just Tg.HTML) botUsername) clientEnv conn
     if polling
-      then (=<<) (either print (const $ pure ())) $ flip runBotM env $ startPolling' handleUpdate
-      else startWebhook token $ flip runBotM_ env . handleUpdate
+      then startPolling' env handleUpdate
+      else startWebhook env token handleUpdate
 
-startPolling' :: (Tg.Update -> BotM a) -> BotM a
-startPolling' handler =
-  controlT (\run -> startPolling $ run . handler)
+startPolling' :: Env -> (Tg.Update -> BotM a) -> IO ()
+startPolling' env handler =
+  controlT (\run -> startPolling $ run . handler) `runBotM_` env
 
 startPolling :: (Tg.Update -> ClientM a) -> ClientM a
 startPolling handleUpdate = go Nothing
@@ -161,8 +161,8 @@ startPolling handleUpdate = go Nothing
       liftIO $ threadDelay 1000000
       go nextUpdateId
 
-startWebhook :: Tg.Token -> (Tg.Update -> IO ()) -> IO ()
-startWebhook (Tg.Token token) handler = do
+startWebhook :: Env -> Tg.Token -> (Tg.Update -> BotM a)  -> IO ()
+startWebhook env (Tg.Token token) handler0 = do
   Warp.runEnv 3000 $ \req respond -> do
     if pathInfo req == ["bot" <> token]
       then do
@@ -172,6 +172,8 @@ startWebhook (Tg.Token token) handler = do
         respond $ responseLBS status200 [] ""
       else
         respond $ responseLBS status404 [] ""
+  where
+      handler x = handler0 x `runBotM_` env
 
 
 eitherToMaybe :: Either e a -> Maybe a
