@@ -36,10 +36,11 @@ import qualified Telegram.Bot.Simple.UpdateParser as P
 import Control.Monad.Except
 import Control.Monad.Trans.Control
 import Network.HTTP.Simple
+import Database.Persist.Sqlite (withSqliteConn)
+import Control.Monad.Logger
 
 import Bot
 import Config
-import Db (DBConn, mkTable, withDBConn)
 import Interface
 import Parser
 
@@ -50,9 +51,6 @@ data Action =
   | BlackListList
   | Reply !Text
   deriving (Show, Eq)
-
-mkEnv :: BotConfig -> ClientEnv -> DBConn -> Env
-mkEnv x y conn = (x, y, conn)
 
 handleUpdate :: (WithBlacklist m, WithBot r m, MonadIO m)
              => Tg.Update -> m ()
@@ -126,13 +124,12 @@ main = do
   Just botUsername <- Tg.userUsername <$>
     runReaderT (runTgApi_ Tg.getMe) clientEnv
 
-  dburl <- BC.pack <$> getEnv "DATABASE_URL"
-  withDBConn dburl $ \conn -> do
-    mkTable conn
-    let env = mkEnv (BotConfig (Just Tg.HTML) botUsername) clientEnv conn
+  dburl <- T.pack <$> getEnv "DATABASE_URL"
+  runNoLoggingT $ withSqliteConn dburl $ \conn -> do
+    let env = (BotConfig (Just Tg.HTML) botUsername, clientEnv, conn)
     if polling
-      then startPolling' env handleUpdate
-      else startWebhook env token handleUpdate
+      then liftIO $ startPolling' env handleUpdate
+      else liftIO $ startWebhook env token handleUpdate
 
 startPolling' :: Env -> (Tg.Update -> BotM a) -> IO ()
 startPolling' env handler =

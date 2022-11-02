@@ -19,12 +19,13 @@ import Data.Has
 import qualified Data.Set as Set
 import Servant.Client
 import qualified Telegram.Bot.API as Tg
+import Database.Persist.Sql (SqlBackend)
 
 import Config
-import Db
 import Interface
+import qualified Blacklist
 
-type Env = (BotConfig, ClientEnv, DBConn)
+type Env = (BotConfig, ClientEnv, SqlBackend)
 
 newtype BotT m a = BotM { unBotM :: ReaderT Env m a }
   deriving (Functor, Applicative, Monad, MonadIO, MonadReader Env)
@@ -44,15 +45,9 @@ instance MonadTransControl BotT where
   restoreT = defaultRestoreT BotM
 
 instance WithBlacklist BotM where
-  getBlacklist x = do
-    conn <- asks getter
-    liftIO $ Set.fromList <$> Db.getBlacklist conn x
-  addBlacklistItem x y = do
-    conn <- asks getter
-    liftIO $ Db.addBlacklistItem conn x y
-  delBlacklistItem x y = do
-    conn <- asks getter
-    liftIO $ Db.delBlacklistItem conn x y
+  getBlacklist x       = Set.fromList <$> Blacklist.get x
+  addBlacklistItem x y = Blacklist.add x y
+  delBlacklistItem x y = Blacklist.del x y
 
 runBotM :: BotM a -> Env -> IO (Either ClientError a)
 runBotM (BotM bot) env@(_, clientEnv, _) =
