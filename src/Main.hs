@@ -28,6 +28,7 @@ import qualified Data.Text.Encoding as T (decodeUtf8)
 import Network.HTTP.Types
 import Network.Wai
 import Network.Wai.Handler.Warp as Warp
+import Network.Wai.Handler.WarpTLS as Warp
 import Servant.Client
 import System.Environment
 import qualified Telegram.Bot.API as Tg
@@ -137,7 +138,8 @@ startPolling' env handler =
 
 startWebhook :: Env -> Tg.Token -> (Tg.Update -> BotM a)  -> IO ()
 startWebhook env (Tg.Token token) handler0 = do
-  Warp.runEnv 3000 $ \req respond -> do
+  runServer <- initWebhookServer
+  runServer $ \req respond -> do
     if pathInfo req == ["bot" <> token]
       then do
         mupdate <- decode <$> strictRequestBody req
@@ -148,6 +150,22 @@ startWebhook env (Tg.Token token) handler0 = do
         respond $ responseLBS status404 [] ""
   where
       handler x = handler0 x `runBotM_` env
+
+initWebhookServer :: IO (Network.Wai.Application -> IO ())
+initWebhookServer = do
+  port <- lookupEnv "PORT" >>= maybe (pure 3000) runReadPort
+  maybeCert <- lookupEnv "SERVER_CERT"
+  maybeKey <- lookupEnv "SERVER_KEY"
+  pure $ case (maybeCert, maybeKey) of
+    (Just cert, Just key) -> let tlsSetting = Warp.tlsSettings cert key
+                                 setting = Warp.setPort port Warp.defaultSettings
+                              in Warp.runTLS tlsSetting setting
+    _                     -> Warp.runEnv port
+  where
+    runReadPort :: String -> IO Int
+    runReadPort sp = case reads sp of
+        ((p', _):_) -> pure p'
+        _ -> fail $ "Invalid value in $PORT: " ++ sp
 
 
 eitherToMaybe :: Either e a -> Maybe a

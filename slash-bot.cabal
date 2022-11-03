@@ -61,4 +61,5 @@ executable slash-bot
     , persistent
     , persistent-sqlite
     , monad-logger
+    , warp-tls
   default-language: Haskell2010
