@@ -37,9 +37,9 @@ import qualified Telegram.Bot.Simple.UpdateParser as P
 import Control.Monad.Except
 import Control.Monad.Trans.Control
 import Network.HTTP.Simple
-import Database.Persist.Sqlite (withSqliteConn)
 import Control.Monad.Logger
 
+import Db
 import Bot
 import Config
 import Interface
@@ -126,7 +126,7 @@ main = do
     runReaderT (runTgApi_ Tg.getMe) clientEnv
 
   dburl <- T.pack <$> getEnv "DATABASE_URL"
-  runNoLoggingT $ withSqliteConn dburl $ \conn -> do
+  runNoLoggingT $ withDBConn dburl $ \conn -> do
     let env = (BotConfig (Just Tg.HTML) botUsername, clientEnv, conn)
     if polling
       then liftIO $ startPolling' env handleUpdate
