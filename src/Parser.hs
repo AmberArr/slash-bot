@@ -202,8 +202,9 @@ getSenderFromMessage msg = do
     x | x == 136817688 || x == 1087968824 -> do
       senderChat <- Tg.messageSenderChat msg
       let name = Tg.chatTitle senderChat
-      username <- Tg.chatUsername senderChat
-      pure (name, mentionWithUsername username)
+          username = Tg.chatUsername senderChat
+          linkBuilder = maybe id mentionWithUsername username
+      pure (name, linkBuilder)
     -- 777000: sender is "Telegram"
     -- which means this message is auto-forwarded by telegram
     777000 -> Nothing
