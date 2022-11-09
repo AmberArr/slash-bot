@@ -204,6 +204,9 @@ getSenderFromMessage msg = do
       let name = Tg.chatTitle senderChat
       username <- Tg.chatUsername senderChat
       pure (name, mentionWithUsername username)
+    -- 777000: sender is "Telegram"
+    -- which means this message is auto-forwarded by telegram
+    777000 -> Nothing
     realUserId -> do
       let name = Tg.userFirstName from
       pure (Just name, mentionWithId (Tg.UserId realUserId))
