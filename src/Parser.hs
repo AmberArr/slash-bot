@@ -72,12 +72,13 @@ parseUpdate update botUsername = do
           update & (Tg.updateMessage
                 >=> Tg.messageReplyToMessage
                 >=> getSenderFromMessage)
-        recipient = case maybeRecipient of
-          Just (Just recipientName, recipientLinkBuilder) ->
-            recipientLinkBuilder recipientName
-          _ -> case altRecipient of
-                  Just x -> x -- already converted to link
-                  _ -> subjectLinkBuilder "自己"
+        recipient = 
+          case altRecipient of
+            Just x -> x -- already converted to link
+            _ -> case maybeRecipient of
+              Just (Just recipientName, recipientLinkBuilder) ->
+                recipientLinkBuilder recipientName
+              _ -> subjectLinkBuilder "自己"
     pure CmdInfo{..}
 
 data TextFragment =
