@@ -110,15 +110,6 @@ extractMention x =
      then Mention (T.tail x)
      else PlainText x
 
-getTextMentionEntities :: Tg.Update -> [Tg.MessageEntity]
-getTextMentionEntities update =
-  case Tg.messageEntities =<< Tg.extractUpdateMessage update of
-    Nothing -> []
-    Just [] -> []
-    Just xs ->
-      flip filter xs $ \entity ->
-        Tg.messageEntityType entity == Tg.MessageEntityTextMention
-
 extractTextMention :: Tg.Update -> Text -> [TextFragment]
 extractTextMention update text =
   case Tg.messageEntities =<< Tg.extractUpdateMessage update of
