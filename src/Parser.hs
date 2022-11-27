@@ -41,6 +41,9 @@ data CmdInfo = CmdInfo
 parseUpdate :: (MonadError () m, MonadIO m) => Tg.Update -> Text -> m CmdInfo
 parseUpdate update botUsername = do
   text <- liftMaybe $ P.runUpdateParser P.text update
+  case T.lines text of
+    [_] -> pure ()
+    _ -> throwError ()
   isActiveVoice <- case T.head text of
     '/' -> pure True
     '\\' -> pure False
