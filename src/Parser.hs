@@ -51,26 +51,23 @@ parseUpdate update botUsername = do
   frags <- pure $ breakText update $ T.tail $ escape text
   (frags, isIgnoreBlacklist) <-
     flip runStateT False $ handleTargetUsername botUsername frags
-  let (isAltSubject, isAltRecipient) = case frags of
-        (x: _)    | isMention x -> (True, False)
-        (_: y: _) | isMention y -> (False, True)
-        _ -> (False, False)
-  words <- traverse tryConvertMentionToLink frags
-  (cmd, altSubject, altRecipient, remainder) <-
-    case (words, isAltSubject, isAltRecipient) of
-      (  x:y, True,    _) -> pure ("",  Just x, Nothing, y)
-      (x:y:z,    _, True) -> pure ( x, Nothing,  Just y, z)
-      (  x:y,    _,    _) -> pure ( x, Nothing, Nothing, y)
-      _ -> throwError ()
+  (cmd, remainder, altRecipient) <- case frags of
+     (x:_)   | isMention x -> throwError () -- `/@username blabla` is not supported
+     (x:y:z) | isMention y -> (,,)
+       <$> tryConvertMentionToLink x
+       <*> traverse tryConvertMentionToLink z
+       <*> fmap Just (tryConvertMentionToLink y)
+     (x:y) -> (,,)
+       <$> tryConvertMentionToLink x
+       <*> traverse tryConvertMentionToLink y
+       <*> pure Nothing
+     [] -> throwError ()
 
   liftMaybe $ do
     (subjectName, subjectLinkBuilder) <-
       update & (Tg.updateMessage >=> getSenderFromMessage)
 
-    let subject = maybe "Ta" subjectLinkBuilder $ msum
-          [ altSubject
-          , subjectName
-          ]
+    let subject = maybe "Ta" subjectLinkBuilder subjectName
         maybeRecipient =
           update & (Tg.updateMessage
                 >=> Tg.messageReplyToMessage
@@ -78,9 +75,8 @@ parseUpdate update botUsername = do
         recipient = case maybeRecipient of
           Just (Just recipientName, recipientLinkBuilder) ->
             recipientLinkBuilder recipientName
-          _ -> case (isAltSubject, altRecipient) of
-                  (True, _)   -> T.empty
-                  (_, Just x) -> x
+          _ -> case altRecipient of
+                  Just x -> x -- already converted to link
                   _ -> subjectLinkBuilder "自己"
     pure CmdInfo{..}
 
