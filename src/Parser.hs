@@ -164,14 +164,15 @@ tryConvertMentionToLink = \case
   PlainText x -> pure x
   TextMention userId name -> pure $ mentionWithId userId name
   Mention username -> do
-    name <- fetchName username
+    name <- fromMaybe "这位" <$> fetchName username
     pure $ mentionWithUsername username name
 
-fetchName :: MonadIO m => Text -> m Text
+fetchName :: MonadIO m => Text -> m (Maybe Text)
 fetchName username = do
   let req = parseRequest_ $ T.unpack $ toTgUserWebLink username
   resp <- liftIO $ httpBS req
-  pure $ extractNameFromHTML $ T.decodeUtf8 $ getResponseBody resp
+  let name = extractNameFromHTML $ T.decodeUtf8 $ getResponseBody resp
+  pure $ if T.null name then Just name else Nothing
 
 extractNameFromHTML :: Text -> Text
 extractNameFromHTML htmlText = html ^. lens
