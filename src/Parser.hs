@@ -33,7 +33,6 @@ data CmdInfo = CmdInfo
   , recipient :: Text
   , remainder :: [Text]
   , isActiveVoice :: Bool
-  , isAltSubject :: Bool
   , isIgnoreBlacklist :: Bool
   } deriving (Show, Eq)
 

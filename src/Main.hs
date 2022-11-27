@@ -87,7 +87,6 @@ actionRoute (Just CmdInfo{..}) blacklist = do
       ("you", [])                     -> fail ""
       ("me", T.unwords -> predicate)  -> pure $ Reply [i|#{subject} #{predicate}！|]
       ("you", T.unwords -> predicate) -> pure $ Reply [i|#{recipient} #{predicate}！|]
-      (_, words) | isAltSubject       -> pure $ Reply $ T.unwords (subject : words) <> "！"
       (verb, [])                      -> pure $ Reply [i|#{subject} #{verb} 了 #{recipient}！|]
       (verb, T.unwords -> patient)    -> pure $ Reply [i|#{subject} #{verb} #{recipient} #{patient}！|]
     passiveVoiceHandler = \case
