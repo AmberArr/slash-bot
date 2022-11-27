@@ -230,12 +230,13 @@ splitAtAt text =
     x -> x
 
 escape :: Text -> Text
-escape =
-    T.replace "&" "&amp;"
-  . T.replace "<" "&lt;"
-  . T.replace ">" "&gt;"
-  . T.replace "\"" "&quot;"
-  . T.replace "'"  "&#39;"
+escape = T.concatMap $ \case
+  '<' -> "&lt;"
+  '>' -> "&gt;"
+  '"' -> "&quot;"
+  '\'' -> "&#39;"
+  '&' -> "&amp;"
+  c -> T.singleton c
 
 unescape :: Text -> Text
 unescape =
