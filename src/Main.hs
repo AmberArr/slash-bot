@@ -80,6 +80,8 @@ actionRoute (Just CmdInfo{..}) blacklist = do
       ("_blacklist", "add" : xs)      -> pure $ BlackListAdd xs
       ("_blacklist", "del" : xs)      -> pure $ BlackListDel xs
       ("_blacklist", [])              -> pure BlackListList
+      (_, T.unwords -> predicate)
+        | Just RequestingMode <- altMode -> pure $ Reply [i|#{subject} 叫 #{recipient} #{predicate}！|]
       (cmd, _)
         | not isIgnoreBlacklist
         && cmd `Set.member` blacklist -> fail ""
@@ -90,6 +92,8 @@ actionRoute (Just CmdInfo{..}) blacklist = do
       (verb, [])                      -> pure $ Reply [i|#{subject} #{verb} 了 #{recipient}！|]
       (verb, T.unwords -> patient)    -> pure $ Reply [i|#{subject} #{verb} #{recipient} #{patient}！|]
     passiveVoiceHandler = \case
+      (_, T.unwords -> predicate)
+        | Just RequestingMode <- altMode -> pure $ Reply [i|#{recipient} 叫 #{subject} #{predicate}！|]
       (verb, [])                      -> pure $ Reply [i|#{subject} 被 #{recipient} #{verb} 了！|]
       (verb , T.unwords -> patient)   -> pure $ Reply [i|#{subject} 被 #{recipient} #{verb}#{patient}！|]
 

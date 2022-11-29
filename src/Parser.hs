@@ -6,6 +6,7 @@
 {-# LANGUAGE RecordWildCards #-}
 module Parser
   ( CmdInfo(..)
+  , AltMode(..)
   , parseUpdate
   ) where
 
@@ -34,7 +35,12 @@ data CmdInfo = CmdInfo
   , remainder :: [Text]
   , isActiveVoice :: Bool
   , isIgnoreBlacklist :: Bool
+  , altMode :: Maybe AltMode
   } deriving (Show, Eq)
+
+data AltMode =
+  RequestingMode
+  deriving (Show, Eq)
 
 -- sorry for my s**t code
 parseUpdate :: (MonadError () m, MonadIO m) => Tg.Update -> Text -> m CmdInfo
@@ -51,15 +57,21 @@ parseUpdate update botUsername = do
   frags <- pure $ breakText update $ T.tail $ escape text
   (frags, isIgnoreBlacklist) <-
     flip runStateT False $ handleTargetUsername botUsername frags
-  (cmd, remainder, altRecipient) <- case frags of
-     (x:_)   | isMention x -> throwError () -- `/@username blabla` is not supported
-     (x:y:z) | isMention y -> (,,)
+  (cmd, remainder, altRecipient, altMode) <- case frags of
+     (x:y)   | isMention x -> (,,,)
+       <$> pure T.empty
+       <*> traverse tryConvertMentionToLink y
+       <*> fmap Just (tryConvertMentionToLink x)
+       <*> pure (Just RequestingMode)
+     (x:y:z) | isMention y -> (,,,)
        <$> tryConvertMentionToLink x
        <*> traverse tryConvertMentionToLink z
        <*> fmap Just (tryConvertMentionToLink y)
-     (x:y) -> (,,)
+       <*> pure Nothing
+     (x:y) -> (,,,)
        <$> tryConvertMentionToLink x
        <*> traverse tryConvertMentionToLink y
+       <*> pure Nothing
        <*> pure Nothing
      [] -> throwError ()
 
