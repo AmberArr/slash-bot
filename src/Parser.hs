@@ -202,15 +202,14 @@ getSenderFromMessage msg = do
   case userId of
     -- 136817688: if sender is "@Channel_Bot"
     -- 1087968824: if sender is "@GroupAnonymousBot"
-    x | x == 136817688 || x == 1087968824 -> do
+    -- 777000: sender is "Telegram"
+    -- which means this message is auto-forwarded by telegram
+    x | x == 136817688 || x == 1087968824 || x == 777000 -> do
       senderChat <- Tg.messageSenderChat msg
       let name = Tg.chatTitle senderChat
           username = Tg.chatUsername senderChat
           linkBuilder = maybe id mentionWithUsername username
       pure (name, linkBuilder)
-    -- 777000: sender is "Telegram"
-    -- which means this message is auto-forwarded by telegram
-    777000 -> Nothing
     realUserId -> do
       let name = Tg.userFirstName from
       pure (Just name, mentionWithId (Tg.UserId realUserId))
