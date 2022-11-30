@@ -181,7 +181,7 @@ fetchName username = do
   let req = parseRequest_ $ T.unpack $ toTgUserWebLink username
   resp <- liftIO $ httpBS req
   let name = extractNameFromHTML $ T.decodeUtf8 $ getResponseBody resp
-  pure $ if T.null name then Just name else Nothing
+  pure $ if T.null name then Nothing else Just name
 
 extractNameFromHTML :: Text -> Text
 extractNameFromHTML htmlText = html ^. lens
