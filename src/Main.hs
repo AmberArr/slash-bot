@@ -40,12 +40,14 @@ import Control.Monad.Trans.Control
 import Network.HTTP.Simple
 import Control.Monad.Logger
 import qualified Text.Regex.TDFA as Regex
+import Database.Persist.Sql (runMigration)
 
 import Db
 import Bot
 import Config
 import Interface
 import Parser
+import qualified Blacklist as Blacklist (migrateAll)
 
 data Action =
     Ping
@@ -161,6 +163,7 @@ main = do
   dburl <- T.pack <$> getEnv "DATABASE_URL"
   runNoLoggingT $ withDBConn dburl $ \conn -> do
     let env = (BotConfig (Just Tg.HTML) botUsername, clientEnv, conn)
+    liftIO $ flip runReaderT conn $ runMigration (Blacklist.migrateAll)
     if polling
       then liftIO $ startPolling' env handleUpdate
       else liftIO $ startWebhook env token handleUpdate
