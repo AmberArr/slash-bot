@@ -28,6 +28,8 @@ import qualified Telegram.Bot.API as Tg
 import qualified Telegram.Bot.Simple.UpdateParser as P
 import qualified Text.HTML.DOM as HTML
 
+import Util
+
 data CmdInfo = CmdInfo
   { cmd :: Text
   , subject :: Text
@@ -238,20 +240,3 @@ splitAtAt text =
   case T.break (== '@') text of
     (x, y) | "@" `T.isPrefixOf` y -> (x, T.tail y)
     x -> x
-
-escape :: Text -> Text
-escape = T.concatMap $ \case
-  '<' -> "&lt;"
-  '>' -> "&gt;"
-  '"' -> "&quot;"
-  '\'' -> "&#39;"
-  '&' -> "&amp;"
-  c -> T.singleton c
-
-unescape :: Text -> Text
-unescape =
-    T.replace "&amp;"   "&"
-  . T.replace "&lt;"    "<"
-  . T.replace "&gt;"    ">"
-  . T.replace "&quot;"  "\""
-  . T.replace "&#39;"   "'"

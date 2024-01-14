@@ -47,6 +47,7 @@ import Bot
 import Config
 import Interface
 import Parser
+import Util
 import qualified Blacklist as Blacklist (migrateAll)
 
 data Action =
@@ -92,7 +93,7 @@ actionRoute (Just CmdInfo{..}) = do
       (_, T.unwords -> predicate)
         | Just RequestingMode <- altMode -> pure $ Reply [i|#{subject} 叫 #{recipient} #{predicate}！|]
       x | isIgnoreBlacklist -> continue x
-      x@(cmd, _) -> CheckBlackList cmd : continue x
+      x@(cmd, _) -> CheckBlackList ("/" <> cmd) : continue x
     continue = \case
       ("me", [])                      -> fail ""
       ("you", [])                     -> fail ""
@@ -103,6 +104,8 @@ actionRoute (Just CmdInfo{..}) = do
     passiveVoiceHandler = \case
       (_, T.unwords -> predicate)
         | Just RequestingMode <- altMode -> pure $ Reply [i|#{recipient} 叫 #{subject} #{predicate}！|]
+      x@(cmd, _)                       -> CheckBlackList ("\\" <> cmd) : continue2 x
+    continue2 = \case
       (verb, [])                      -> pure $ Reply [i|#{subject} 被 #{recipient} #{verb} 了！|]
       (verb , T.unwords -> patient)   -> pure $ Reply [i|#{subject} 被 #{recipient} #{verb}#{patient}！|]
 
@@ -113,10 +116,9 @@ handleEffectful chatId messageId (action : actions) =
   case action of
     CheckBlackList cmd -> do
       b <- checkBlacklist chatId cmd
-      unless b $ go action
-    _ -> go action
+      unless b $ handleEffectful chatId messageId actions
+    _ -> continue action >> handleEffectful chatId messageId actions
   where
-    go action = continue action >> handleEffectful chatId messageId actions
     continue = \case
       Ping -> reply' "111"
       BlackListAdd xs -> do
@@ -127,14 +129,13 @@ handleEffectful chatId messageId (action : actions) =
         reply' "ok"
       BlackListList -> do
         (plains, regexs) <- getBlacklist chatId
-        -- let size = Set.size blacklist
-        --     s = if size == 1 then "" else "s" :: Text
         reply' $ T.unlines $
           [ "Plaintext blacklist:"
           , T.intercalate " " (Set.toList plains)
+          , ""
           , "Regex blacklist:"
           ]
-          <> regexs
+          <> fmap codeMarkup regexs
       BlackListAddRegex txt -> case unFail $ Regex.makeRegexM $ T.unpack txt of
         Right (regex :: Regex.Regex) -> addBlacklistItem chatId (BLRegex txt) >> reply' "ok"
         Left err -> reply' $ "Invalid regex: " <> T.pack err

@@ -38,6 +38,7 @@ executable slash-bot
                   , Interface.Blacklist
                   , Interface.Bot
                   , Parser
+                  , Util
   -- LANGUAGE extensions used by modules in this package.
   -- other-extensions:
   hs-source-dirs:   src
