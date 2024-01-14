@@ -1,6 +1,6 @@
 cabal-version:      2.4
 name:               slash-bot
-version:            0.1.0.0
+version:            0.2.0.0
 synopsis:           yet another slashbot
 
 -- A longer description of the package.
