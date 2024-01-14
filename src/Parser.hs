@@ -33,6 +33,7 @@ data CmdInfo = CmdInfo
   , subject :: Text
   , recipient :: Text
   , remainder :: [Text]
+  , rawinput :: Text
   , isActiveVoice :: Bool
   , isIgnoreBlacklist :: Bool
   , altMode :: Maybe AltMode
@@ -53,6 +54,7 @@ parseUpdate update botUsername = do
     '/' -> pure True
     '\\' -> pure False
     _ -> throwError ()
+  let rawinput = text
 
   frags <- pure $ breakText update $ T.tail $ escape text
   (frags, isIgnoreBlacklist) <-

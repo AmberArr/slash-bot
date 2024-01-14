@@ -1,5 +1,6 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE GeneralisedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -38,6 +39,7 @@ import Control.Monad.Except
 import Control.Monad.Trans.Control
 import Network.HTTP.Simple
 import Control.Monad.Logger
+import qualified Text.Regex.TDFA as Regex
 
 import Db
 import Bot
@@ -49,7 +51,10 @@ data Action =
     Ping
   | BlackListAdd ![Text]
   | BlackListDel ![Text]
+  | BlackListAddRegex !Text
+  | BlackListDelRegex !Text
   | BlackListList
+  | CheckBlackList !Text
   | Reply !Text
   deriving (Show, Eq)
 
@@ -60,17 +65,17 @@ handleUpdate update = void $ runMaybeT $ do
   botUsername <- botCfgUsername <$> asks getter
   chatId <- hoistMaybe $ Tg.updateChatId update
   cmdInfo <- fmap eitherToMaybe $ runExceptT $ parseUpdate update botUsername
-  action <- MaybeT $ actionRoute cmdInfo <$> getBlacklist chatId
+  let actions = actionRoute cmdInfo
   message <- hoistMaybe $ update & Tg.updateMessage
   let messageId = Tg.messageMessageId message
-  lift $ handleEffectful chatId messageId action
+  lift $ handleEffectful chatId messageId actions
 
 hoistMaybe :: Monad m => Maybe a -> MaybeT m a
 hoistMaybe = MaybeT . pure
 
-actionRoute :: Maybe CmdInfo -> Blacklist -> Maybe Action
-actionRoute Nothing _ = Nothing
-actionRoute (Just CmdInfo{..}) blacklist = do
+actionRoute :: Maybe CmdInfo -> [Action]
+actionRoute Nothing = fail ""
+actionRoute (Just CmdInfo{..}) = do
   if isActiveVoice
     then activeVoiceHandler (cmd, remainder)
     else passiveVoiceHandler (cmd, remainder)
@@ -79,12 +84,14 @@ actionRoute (Just CmdInfo{..}) blacklist = do
       ("_ping", _)                    -> pure Ping
       ("_blacklist", "add" : xs)      -> pure $ BlackListAdd xs
       ("_blacklist", "del" : xs)      -> pure $ BlackListDel xs
+      ("_blacklist", "addregex" : xs) -> pure $ BlackListAddRegex $ T.drop 21 rawinput  -- it works, for now
+      ("_blacklist", "delregex" : xs) -> pure $ BlackListDelRegex $ T.drop 21 rawinput
       ("_blacklist", [])              -> pure BlackListList
       (_, T.unwords -> predicate)
         | Just RequestingMode <- altMode -> pure $ Reply [i|#{subject} 叫 #{recipient} #{predicate}！|]
-      (cmd, _)
-        | not isIgnoreBlacklist
-        && cmd `Set.member` blacklist -> fail ""
+      x | isIgnoreBlacklist -> continue x
+      x@(cmd, _) -> CheckBlackList cmd : continue x
+    continue = \case
       ("me", [])                      -> fail ""
       ("you", [])                     -> fail ""
       ("me", T.unwords -> predicate)  -> pure $ Reply [i|#{subject} #{predicate}！|]
@@ -98,27 +105,50 @@ actionRoute (Just CmdInfo{..}) blacklist = do
       (verb , T.unwords -> patient)   -> pure $ Reply [i|#{subject} 被 #{recipient} #{verb}#{patient}！|]
 
 handleEffectful :: (WithBlacklist m, WithBot r m)
-                => Tg.ChatId -> Tg.MessageId -> Action -> m ()
-handleEffectful chatId messageId action = case action of
-  Ping -> reply' "111"
-  BlackListAdd xs -> do
-    forM_ xs $ addBlacklistItem chatId
-    reply' "ok"
-  BlackListDel xs -> do
-    forM_ xs $ delBlacklistItem chatId
-    reply' "ok"
-  BlackListList -> do
-    blacklist <- getBlacklist chatId
-    let size = Set.size blacklist
-        s = if size == 1 then "" else "s" :: Text
-    reply' $ T.unlines
-      [ [i|Blacklisted #{size} command#{s}:|]
-      , T.intercalate " " (Set.toList blacklist)
-      ]
-  Reply x -> reply' x
+                => Tg.ChatId -> Tg.MessageId -> [Action] -> m ()
+handleEffectful chatId messageId [] = pure ()
+handleEffectful chatId messageId (action : actions) =
+  case action of
+    CheckBlackList cmd -> do
+      b <- checkBlacklist chatId cmd
+      unless b $ go action
+    _ -> go action
   where
-    reply' = sendTextTo (Tg.SomeChatId chatId) (Just messageId) . prependLTRMark
+    go action = continue action >> handleEffectful chatId messageId actions
+    continue = \case
+      Ping -> reply' "111"
+      BlackListAdd xs -> do
+        forM_ xs $ addBlacklistItem chatId
+        reply' "ok"
+      BlackListDel xs -> do
+        forM_ xs $ delBlacklistItem chatId
+        reply' "ok"
+      BlackListList -> do
+        (plains, regexs) <- getBlacklist chatId
+        -- let size = Set.size blacklist
+        --     s = if size == 1 then "" else "s" :: Text
+        reply' $ T.unlines $
+          [ "Plaintext blacklist:"
+          , T.intercalate " " (Set.toList plains)
+          , "Regex blacklist:"
+          ]
+          <> regexs
+      BlackListAddRegex txt -> case unFail $ Regex.makeRegexM $ T.unpack txt of
+        Right (regex :: Regex.Regex) -> addBlacklistItem chatId (BLRegex txt) >> reply' "ok"
+        Left err -> reply' $ "Invalid regex: " <> T.pack err
+      BlackListDelRegex txt -> delBlacklistItem chatId (BLRegex txt) >> reply' "ok"
+      Reply x -> reply' x
+      CheckBlackList cmd -> undefined
+    reply' x = sendTextTo (Tg.SomeChatId chatId) (Just messageId) $ prependLTRMark x
     prependLTRMark x = "\8206" <> x
+
+
+-- there's no MonadFail for (Either String) ...
+newtype Fail a = Fail { unFail :: Either String a }
+  deriving (Functor, Applicative, Monad)
+
+instance MonadFail Fail where
+  fail x = Fail (Left x)
 
 main :: IO ()
 main = do

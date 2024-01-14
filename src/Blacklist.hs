@@ -8,6 +8,7 @@
 module Blacklist where
 
 import Control.Monad.Reader
+import Data.Either
 import Data.Has
 import Data.Int
 import Data.Text (Text)
@@ -20,6 +21,7 @@ share [mkPersist sqlSettings, mkMigrate "migrateAll"] [persistLowerCase|
 Blacklist
     chatId Int64
     command Text
+    isRegex Bool default=False
     deriving Show
 |]
 
@@ -41,9 +43,10 @@ add
      )
   => Tg.ChatId
   -> Text
+  -> Bool
   -> m ()
-add (Tg.ChatId i) cmd = toClassy $ void $
-  insertRecord (Blacklist (fromInteger i) cmd)
+add (Tg.ChatId i) cmd isRegex = toClassy $ void $
+  insertRecord (Blacklist (fromInteger i) cmd isRegex)
 
 del
   :: ( MonadIO m
@@ -52,11 +55,13 @@ del
      )
   => Tg.ChatId
   -> Text
+  -> Bool
   -> m ()
-del (Tg.ChatId i) cmd = toClassy $ void $
+del (Tg.ChatId i) cmd isRegex = toClassy $ void $
   deleteWhere
     [ BlacklistChatId ==. fromInteger i
     , BlacklistCommand ==. cmd
+    , BlacklistIsRegex ==. isRegex
     ]
 
 get
@@ -65,7 +70,13 @@ get
      , Has SqlBackend r
      )
   => Tg.ChatId
-  -> m [Text]
+  -> m ([Text], [Text])
 get (Tg.ChatId i) = toClassy $ do
   results <- selectList [ BlacklistChatId ==. fromInteger i ] []
-  pure $ fmap (blacklistCommand . entityVal) results
+  pure $ partitionEithers (fmap f results)
+    where
+      f entity =
+        let val = entityVal entity
+            txt = blacklistCommand val
+            isRegex = blacklistIsRegex val
+        in if isRegex then Right txt else Left txt

@@ -3,6 +3,7 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Bot
        ( Env
        , BotT(..)
@@ -20,6 +21,10 @@ import qualified Data.Set as Set
 import Servant.Client
 import qualified Telegram.Bot.API as Tg
 import Database.Persist.Sql (SqlBackend)
+import qualified Text.Regex.TDFA as Regex
+import qualified Data.Text as T
+import Data.Maybe
+import System.Timeout (timeout)
 
 import Config
 import Interface
@@ -28,7 +33,7 @@ import qualified Blacklist
 type Env = (BotConfig, ClientEnv, SqlBackend)
 
 newtype BotT m a = BotM { unBotM :: ReaderT Env m a }
-  deriving (Functor, Applicative, Monad, MonadIO, MonadReader Env)
+  deriving (Functor, Applicative, Monad, MonadIO, MonadReader Env, MonadFail)
 
 type BotM = BotT ClientM
 
@@ -45,9 +50,16 @@ instance MonadTransControl BotT where
   restoreT = defaultRestoreT BotM
 
 instance WithBlacklist BotM where
-  getBlacklist x       = Set.fromList <$> Blacklist.get x
-  addBlacklistItem x y = Blacklist.add x y
-  delBlacklistItem x y = Blacklist.del x y
+  getBlacklist chatId = do
+    (plains, regexs) <- Blacklist.get chatId
+    pure (Set.fromList plains, regexs)
+  addBlacklistItem chatId item = let (txt, isRegex) = blItem item in Blacklist.add chatId txt isRegex
+  delBlacklistItem chatId item = let (txt, isRegex) = blItem item in Blacklist.del chatId txt isRegex
+  checkBlacklist chatId input = do
+    (plains, regexs0) <- getBlacklist chatId
+    let regexs = Regex.makeRegex . T.unpack . (\x -> "^" <> x <> "$") <$> regexs0 :: [Regex.Regex]
+    let docheck = pure $ input `Set.member` plains || any (\regex -> Regex.matchTest regex input) regexs
+    fmap (fromMaybe True) $ liftIO $ timeout 1000000 docheck
 
 runBotM :: BotM a -> Env -> IO (Either ClientError a)
 runBotM (BotM bot) env@(_, clientEnv, _) =
