@@ -5,6 +5,7 @@
 {-# LANGUAGE UndecidableInstances #-}
 module Interface.Bot where
 
+import Control.Monad
 import Control.Monad.Reader
 import Data.Function
 import Data.Has
@@ -25,18 +26,19 @@ sendTextTo :: MonadBot r m
            => Tg.SomeChatId -> Maybe Tg.MessageId -> Text -> m ()
 sendTextTo chatId messageId text = do
   parseMode <- botCfgParseMode <$> asks getter
-  void $ sendMessage Tg.SendMessageRequest
-    { Tg.sendMessageChatId = chatId
-    , Tg.sendMessageText = text
-    , Tg.sendMessageParseMode = parseMode
-    , Tg.sendMessageEntities = Nothing
-    , Tg.sendMessageDisableWebPagePreview = Just True
-    , Tg.sendMessageDisableNotification = Nothing
-    , Tg.sendMessageProtectContent = Nothing
+  void $ sendMessage $ (Tg.defSendMessage chatId text)
+    { Tg.sendMessageParseMode = parseMode
+    , Tg.sendMessageLinkPreviewOptions = Just linkPreviewOptions
     , Tg.sendMessageReplyToMessageId = messageId
-    , Tg.sendMessageAllowSendingWithoutReply = Nothing
-    , Tg.sendMessageReplyMarkup = Nothing
     }
+  where
+    linkPreviewOptions = Tg.LinkPreviewOptions
+      { Tg.linkPreviewOptionsIsDisabled       = Just True
+      , Tg.linkPreviewOptionsUrl              = Nothing
+      , Tg.linkPreviewOptionsPreferSmallMedia = Nothing
+      , Tg.linkPreviewOptionsPreferLargeMedia = Nothing
+      , Tg.linkPreviewOptionsShowAboveText    = Nothing
+      }
 
 reply :: MonadBot r m
       => Tg.Update -> Text -> m ()

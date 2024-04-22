@@ -3,10 +3,17 @@
 # For more information, please see the documentation at:
 #   https://docs.haskellstack.org/en/stable/lock_files
 
-packages: []
+packages:
+- completed:
+    hackage: xml-lens-0.3.1@sha256:0e46146268c967bd5f1f6a1b97bba6b67dbf88b1794daa0197ccbc3f9ba58c58,1135
+    pantry-tree:
+      sha256: 3af65d25b4ab469866219c3c742d7f8fa16d22b3e9f1a1d12b5c1e318fa50bc4
+      size: 309
+  original:
+    hackage: xml-lens-0.3.1@sha256:0e46146268c967bd5f1f6a1b97bba6b67dbf88b1794daa0197ccbc3f9ba58c58,1135
 snapshots:
 - completed:
-    sha256: 3233075571f670c32ca84e859ae121e8cb4a0cb2c2752f4afcd6195a8620f23c
-    size: 646692
-    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/nightly/2022/10/29.yaml
-  original: nightly-2022-10-29
+    sha256: 41d2cdb6a2b1d30d53bba4e2a5191ce30cbfae9fc239f091d9236419d3d35df5
+    size: 625140
+    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/nightly/2024/4/22.yaml
+  original: nightly-2024-04-22

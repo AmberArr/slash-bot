@@ -1,5 +1,12 @@
-# resolver: lts-19.5
-resolver: nightly-2022-10-29
+resolver: nightly-2024-04-22
 
 packages:
 - .
+
+extra-deps:
+- xml-lens-0.3.1@sha256:0e46146268c967bd5f1f6a1b97bba6b67dbf88b1794daa0197ccbc3f9ba58c58,1135
+
+allow-newer: true
+
+allow-newer-deps:
+- xml-lens

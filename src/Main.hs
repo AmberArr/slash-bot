@@ -33,8 +33,6 @@ import Network.Wai.Handler.WarpTLS as Warp
 import Servant.Client
 import System.Environment
 import qualified Telegram.Bot.API as Tg
-import Telegram.Bot.Simple.BotApp.Internal (startPolling)
-import qualified Telegram.Bot.Simple.UpdateParser as P
 import Control.Monad.Except
 import Control.Monad.Trans.Control
 import Network.HTTP.Simple
@@ -72,9 +70,6 @@ handleUpdate update = void $ runMaybeT $ do
   message <- hoistMaybe $ update & Tg.updateMessage
   let messageId = Tg.messageMessageId message
   lift $ handleEffectful chatId messageId actions
-
-hoistMaybe :: Monad m => Maybe a -> MaybeT m a
-hoistMaybe = MaybeT . pure
 
 actionRoute :: Maybe CmdInfo -> [Action]
 actionRoute Nothing = fail ""
@@ -172,6 +167,31 @@ main = do
 startPolling' :: Env -> (Tg.Update -> BotM a) -> IO ()
 startPolling' env handler =
   controlT (\run -> startPolling $ run . handler) `runBotM_` env
+
+-- Steal from Telegram.Bot.Simple.BotApp.Internal
+startPolling :: (Tg.Update -> ClientM a) -> ClientM a
+startPolling handleUpdate = go Nothing
+  where
+    go lastUpdateId = do
+      let inc (Tg.UpdateId n) = Tg.UpdateId (n + 1)
+          offset = fmap inc lastUpdateId
+      res <-
+        (Right <$> Tg.getUpdates
+          (Tg.GetUpdatesRequest offset Nothing (Just 25) Nothing))
+        `catchError` (pure . Left)
+
+      nextUpdateId <- case res of
+        Left servantErr -> do
+          liftIO (print servantErr)
+          pure lastUpdateId
+        Right result -> do
+          let updates = Tg.responseResult result
+              updateIds = map Tg.updateUpdateId updates
+              maxUpdateId = maximum (Nothing : map Just updateIds)
+          mapM_ handleUpdate updates
+          pure maxUpdateId
+      liftIO $ threadDelay 1000000
+      go nextUpdateId
 
 startWebhook :: Env -> Tg.Token -> (Tg.Update -> BotM a)  -> IO ()
 startWebhook env (Tg.Token token) handler0 = do

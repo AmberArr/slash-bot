@@ -1,3 +1,5 @@
 .stack-work/
+*.hie
+dist/
 tags
 *~

@@ -25,7 +25,6 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as T (decodeUtf8)
 import qualified Data.Text.Lazy as LT
 import qualified Telegram.Bot.API as Tg
-import qualified Telegram.Bot.Simple.UpdateParser as P
 import qualified Text.HTML.DOM as HTML
 
 import Util
@@ -48,7 +47,7 @@ data AltMode =
 -- sorry for my s**t code
 parseUpdate :: (MonadError () m, MonadIO m) => Tg.Update -> Text -> m CmdInfo
 parseUpdate update botUsername = do
-  text <- liftMaybe $ P.runUpdateParser P.text update
+  text <- liftMaybe $ Tg.extractUpdateMessage update >>= Tg.messageText
   case T.lines text of
     [_] -> pure ()
     _ -> throwError ()

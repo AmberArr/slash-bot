@@ -7,6 +7,7 @@
 {-# LANGUAGE UndecidableInstances #-}
 module Blacklist where
 
+import Control.Monad
 import Control.Monad.Reader
 import Data.Either
 import Data.Has

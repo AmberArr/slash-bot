@@ -59,7 +59,7 @@ executable slash-bot
     , servant-client
     , strict
     , string-interpolate
-    , telegram-bot-simple
+    , telegram-bot-api ^>= 7.0
     , text
     , transformers
     , vector
