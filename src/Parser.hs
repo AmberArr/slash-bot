@@ -14,8 +14,6 @@ import Control.Lens ((^.), (&), (...), cosmos)
 import Control.Monad
 import Control.Monad.Except
 import Control.Monad.State
-import Data.Function (on)
-import Data.List (sortOn)
 import Data.Maybe
 import Data.String.Interpolate (i)
 import Data.Text (Text)
@@ -62,8 +60,8 @@ parseUpdate update botUsername = do
     flip runStateT False $ handleTargetUsername botUsername frags
   (cmd, remainder, altRecipient, altMode) <- case frags of
      (x:y)   | isMention x -> (,,,)
-       <$> pure T.empty
-       <*> traverse tryConvertMentionToLink y
+           T.empty
+       <$> traverse tryConvertMentionToLink y
        <*> fmap Just (tryConvertMentionToLink x)
        <*> pure (Just RequestingMode)
      (x:y:z) | isMention y -> (,,,)
@@ -87,7 +85,7 @@ parseUpdate update botUsername = do
           update & (Tg.updateMessage
                 >=> Tg.messageReplyToMessage
                 >=> getSenderFromMessage)
-        recipient = 
+        recipient =
           case altRecipient of
             Just x -> x -- already converted to link
             _ -> case maybeRecipient of
@@ -129,7 +127,6 @@ extractTextMention update text =
     Just xs ->
       let entities = flip filter xs $ \entity ->
             Tg.messageEntityType entity == Tg.MessageEntityTextMention
-          sortOnOffset = sortOn Tg.messageEntityOffset
        in replacing entities 1 text -- 1 since the initial slash is striped
   where
     replacing :: [Tg.MessageEntity] -> Int -> Text -> [TextFragment]

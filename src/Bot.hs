@@ -58,7 +58,7 @@ instance WithBlacklist BotM where
   checkBlacklist chatId input = do
     (plains, regexs0) <- getBlacklist chatId
     let regexs = Regex.makeRegex . T.unpack . (\x -> "^" <> x <> "$") <$> regexs0 :: [Regex.Regex]
-    let docheck = pure $ (T.drop 1 input) `Set.member` plains || any (\regex -> Regex.matchTest regex input) regexs
+    let docheck = pure $ T.drop 1 input `Set.member` plains || any (`Regex.matchTest` input) regexs
     fmap (fromMaybe True) $ liftIO $ timeout 1000000 docheck
 
 runBotM :: BotM a -> Env -> IO (Either ClientError a)

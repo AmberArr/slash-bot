@@ -11,13 +11,11 @@
 {-# LANGUAGE TypeApplications #-}
 module Main where
 
-import Control.Arrow ((>>>), (&&&), second)
 import Control.Concurrent
 import Control.Monad
 import Control.Monad.Reader
 import Control.Monad.Trans.Maybe
 import Data.Aeson (decode)
-import qualified Data.ByteString.Char8 as BC
 import Data.Function
 import Data.Has
 import Data.Maybe
@@ -25,7 +23,6 @@ import qualified Data.Set as Set
 import Data.String.Interpolate (i)
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.Encoding as T (decodeUtf8)
 import Network.HTTP.Types
 import Network.Wai
 import Network.Wai.Handler.Warp as Warp
@@ -35,7 +32,6 @@ import System.Environment
 import qualified Telegram.Bot.API as Tg
 import Control.Monad.Except
 import Control.Monad.Trans.Control
-import Network.HTTP.Simple
 import Control.Monad.Logger
 import qualified Text.Regex.TDFA as Regex
 import Database.Persist.Sql (runMigration)
@@ -46,7 +42,7 @@ import Config
 import Interface
 import Parser
 import Util
-import qualified Blacklist as Blacklist (migrateAll)
+import qualified Blacklist (migrateAll)
 
 data Action =
     Ping
@@ -61,9 +57,8 @@ data Action =
 
 handleUpdate :: (WithBlacklist m, WithBot r m, MonadIO m)
              => Tg.Update -> m ()
-{- HLINT ignore handleUpdate -}
 handleUpdate update = void $ runMaybeT $ do
-  botUsername <- botCfgUsername <$> asks getter
+  botUsername <- asks (botCfgUsername . getter)
   chatId <- hoistMaybe $ Tg.updateChatId update
   cmdInfo <- fmap eitherToMaybe $ runExceptT $ parseUpdate update botUsername
   let actions = actionRoute cmdInfo
@@ -159,7 +154,7 @@ main = do
   dburl <- T.pack <$> getEnv "DATABASE_URL"
   runNoLoggingT $ withDBConn dburl $ \conn -> do
     let env = (BotConfig (Just Tg.HTML) botUsername, clientEnv, conn)
-    liftIO $ flip runReaderT conn $ runMigration (Blacklist.migrateAll)
+    liftIO $ flip runReaderT conn $ runMigration Blacklist.migrateAll
     if polling
       then liftIO $ startPolling' env handleUpdate
       else liftIO $ startWebhook env token handleUpdate

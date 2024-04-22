@@ -10,7 +10,6 @@ import Control.Monad.Reader
 import Data.Function
 import Data.Has
 import Data.Text (Text)
-import Servant.Client
 import qualified Telegram.Bot.API as Tg
 
 import Config
@@ -21,11 +20,10 @@ class (Monad m, MonadReader r m, Has BotConfig r) => MonadBot r m where
   getMe :: m Tg.User
   sendMessage :: Tg.SendMessageRequest -> m Tg.Message
 
-{- HLINT ignore sendTextTo -}
 sendTextTo :: MonadBot r m
            => Tg.SomeChatId -> Maybe Tg.MessageId -> Text -> m ()
 sendTextTo chatId messageId text = do
-  parseMode <- botCfgParseMode <$> asks getter
+  parseMode <- asks (botCfgParseMode . getter)
   void $ sendMessage $ (Tg.defSendMessage chatId text)
     { Tg.sendMessageParseMode = parseMode
     , Tg.sendMessageLinkPreviewOptions = Just linkPreviewOptions

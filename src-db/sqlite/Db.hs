@@ -4,7 +4,6 @@ module Db
 
 import Control.Monad.Logger (MonadLoggerIO)
 import Data.Text (Text)
-import Data.Text.Encoding (encodeUtf8)
 import Database.Persist.Sql (SqlBackend)
 import UnliftIO (MonadUnliftIO)
 
