@@ -47,6 +47,8 @@ executable slash-bot
     , base
     , containers
     , data-has
+    , effectful-core
+    , effectful
     , http-conduit
     , http-types
     , mtl
