@@ -45,24 +45,18 @@ executable slash-bot
   build-depends:
       aeson
     , base
-    , bytestring
     , containers
     , data-has
-    , deepseq
-    , fast-logger
     , http-conduit
     , http-types
-    , megaparsec
     , mtl
     , wai
     , warp
     , servant-client
-    , strict
     , string-interpolate
     , telegram-bot-api ^>= 7.0
     , text
     , transformers
-    , vector
     , monad-control
     , html-conduit
     , xml-lens
