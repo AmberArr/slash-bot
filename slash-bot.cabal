@@ -5,13 +5,13 @@ synopsis:           yet another slashbot
 
 -- A longer description of the package.
 -- description:
-homepage:           https://github.com/FroskyArr/slash-bot
+homepage:           https://github.com/AmberArr/slash-bot
 
 -- A URL where users can report bugs.
 -- bug-reports:
 license:            AGPL-3.0-or-later
 license-file:       LICENSE
-author:             Patrick 'FroskyArr' Chen
+author:             Amber 'AmberArr' Chen
 maintainer:         me@frost.moe
 
 -- A copyright notice.
@@ -30,8 +30,7 @@ executable slash-bot
   main-is:          Main.hs
 
   -- Modules included in this executable, other than Main.
-  other-modules:    Bot
-                  , Blacklist
+  other-modules:    Blacklist
                   , Db
                   , Config
                   , Interface
@@ -41,6 +40,24 @@ executable slash-bot
                   , Util
   -- LANGUAGE extensions used by modules in this package.
   -- other-extensions:
+  default-extensions:
+      ConstraintKinds
+    , DataKinds
+    , DerivingStrategies
+    , FlexibleContexts
+    , FlexibleInstances
+    , GADTs
+    , GeneralizedNewtypeDeriving
+    , KindSignatures
+    , LambdaCase
+    , MultiParamTypeClasses
+    , MultiWayIf
+    , OverloadedStrings
+    , RecordWildCards
+    , ScopedTypeVariables
+    , TypeApplications
+    , TypeOperators
+    , UndecidableInstances
   hs-source-dirs:   src
   build-depends:
       aeson
@@ -58,8 +75,6 @@ executable slash-bot
     , string-interpolate
     , telegram-bot-api ^>= 7.0
     , text
-    , transformers
-    , monad-control
     , html-conduit
     , xml-lens
     , lens
@@ -76,4 +91,4 @@ executable slash-bot
     build-depends: persistent-sqlite
     hs-source-dirs: src-db/sqlite
 
-  default-language: Haskell2010
+  default-language: GHC2021

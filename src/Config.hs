@@ -1,9 +1,7 @@
 module Config where
 
-import Data.Text (Text)
-import qualified Telegram.Bot.API as Tg
+import Telegram.Bot.API qualified as Tg
 
 data BotConfig = BotConfig
   { botCfgParseMode :: Maybe Tg.ParseMode
-  , botCfgUsername :: Text
   }

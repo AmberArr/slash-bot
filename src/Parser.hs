@@ -1,29 +1,27 @@
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE QuasiQuotes #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE RecordWildCards #-}
-module Parser
-  ( CmdInfo(..)
-  , AltMode(..)
-  , parseUpdate
-  ) where
 
-import Control.Lens ((^.), (&), (...), cosmos)
+module Parser (
+  CmdInfo (..),
+  AltMode (..),
+  parseUpdate,
+) where
+
+import Control.Lens (cosmos, (&), (...), (^.))
 import Control.Monad
-import Control.Monad.Except
-import Control.Monad.State
 import Data.Maybe
 import Data.String.Interpolate (i)
 import Data.Text (Text)
-import Network.HTTP.Simple (httpBS, getResponseBody, parseRequest_)
+import Data.Text qualified as T
+import Data.Text.Encoding qualified as T (decodeUtf8)
+import Data.Text.Lazy qualified as LT
+import Network.HTTP.Simple (getResponseBody, httpBS, parseRequest_)
+import Telegram.Bot.API qualified as Tg
+import Text.HTML.DOM qualified as HTML
 import Text.XML.Lens (attributeIs, named, root, text)
-import qualified Data.Text as T
-import qualified Data.Text.Encoding as T (decodeUtf8)
-import qualified Data.Text.Lazy as LT
-import qualified Telegram.Bot.API as Tg
-import qualified Text.HTML.DOM as HTML
+
+import Effectful
+import Effectful.Fail
+import Effectful.State.Static.Local
 
 import Util
 
@@ -36,74 +34,81 @@ data CmdInfo = CmdInfo
   , isActiveVoice :: Bool
   , isIgnoreBlacklist :: Bool
   , altMode :: Maybe AltMode
-  } deriving (Show, Eq)
+  }
+  deriving (Show, Eq)
 
-data AltMode =
-  RequestingMode
+data AltMode
+  = RequestingMode
   deriving (Show, Eq)
 
 -- sorry for my s**t code
-parseUpdate :: (MonadError () m, MonadIO m) => Tg.Update -> Text -> m CmdInfo
+parseUpdate :: (IOE :> es, Fail :> es) => Tg.Update -> Text -> Eff es CmdInfo
 parseUpdate update botUsername = do
-  text <- liftMaybe $ Tg.extractUpdateMessage update >>= Tg.messageText
+  Just text <- pure $ Tg.extractUpdateMessage update >>= Tg.messageText
   case T.lines text of
     [_] -> pure ()
-    _ -> throwError ()
+    _ -> fail ""
   isActiveVoice <- case T.head text of
     '/' -> pure True
     '\\' -> pure False
-    _ -> throwError ()
+    _ -> fail ""
   let rawinput = text
 
   frags <- pure $ breakText update $ T.tail $ escape text
   (frags, isIgnoreBlacklist) <-
-    flip runStateT False $ handleTargetUsername botUsername frags
+    runState False $ handleTargetUsername botUsername frags
   (cmd, remainder, altRecipient, altMode) <- case frags of
-     (x:y)   | isMention x -> (,,,)
-           T.empty
-       <$> traverse tryConvertMentionToLink y
-       <*> fmap Just (tryConvertMentionToLink x)
-       <*> pure (Just RequestingMode)
-     (x:y:z) | isMention y -> (,,,)
-       <$> tryConvertMentionToLink x
-       <*> traverse tryConvertMentionToLink z
-       <*> fmap Just (tryConvertMentionToLink y)
-       <*> pure Nothing
-     (x:y) -> (,,,)
-       <$> tryConvertMentionToLink x
-       <*> traverse tryConvertMentionToLink y
-       <*> pure Nothing
-       <*> pure Nothing
-     [] -> throwError ()
+    (x : y)
+      | isMention x ->
+          (,,,)
+            T.empty
+            <$> traverse tryConvertMentionToLink y
+            <*> fmap Just (tryConvertMentionToLink x)
+            <*> pure (Just RequestingMode)
+    (x : y : z)
+      | isMention y ->
+          (,,,)
+            <$> tryConvertMentionToLink x
+            <*> traverse tryConvertMentionToLink z
+            <*> fmap Just (tryConvertMentionToLink y)
+            <*> pure Nothing
+    (x : y) ->
+      (,,,)
+        <$> tryConvertMentionToLink x
+        <*> traverse tryConvertMentionToLink y
+        <*> pure Nothing
+        <*> pure Nothing
+    [] -> fail ""
 
-  liftMaybe $ do
-    (subjectName, subjectLinkBuilder) <-
-      update & (Tg.updateMessage >=> getSenderFromMessage)
+  Just (subjectName, subjectLinkBuilder) <-
+    pure $ update & (Tg.updateMessage >=> getSenderFromMessage)
 
-    let subject = maybe "Ta" subjectLinkBuilder subjectName
-        maybeRecipient =
-          update & (Tg.updateMessage
+  let subject = maybe "Ta" subjectLinkBuilder subjectName
+      maybeRecipient =
+        update
+          & ( Tg.updateMessage
                 >=> Tg.messageReplyToMessage
-                >=> getSenderFromMessage)
-        recipient =
-          case altRecipient of
-            Just x -> x -- already converted to link
-            _ -> case maybeRecipient of
-              Just (Just recipientName, recipientLinkBuilder) ->
-                recipientLinkBuilder recipientName
-              _ -> subjectLinkBuilder "自己"
-    pure CmdInfo{..}
+                >=> getSenderFromMessage
+            )
+      recipient =
+        case altRecipient of
+          Just x -> x -- already converted to link
+          _ -> case maybeRecipient of
+            Just (Just recipientName, recipientLinkBuilder) ->
+              recipientLinkBuilder recipientName
+            _ -> subjectLinkBuilder "自己"
+  pure CmdInfo{..}
 
-data TextFragment =
-    PlainText !Text
+data TextFragment
+  = PlainText !Text
   | Mention !Text
   | TextMention !Tg.UserId !Text
   deriving (Eq, Show)
 
 isMention :: TextFragment -> Bool
 isMention = \case
-  PlainText _     -> False
-  Mention _       -> True
+  PlainText _ -> False
+  Mention _ -> True
   TextMention _ _ -> True
 
 breakText :: Tg.Update -> Text -> [TextFragment]
@@ -116,8 +121,8 @@ breakText update text = do
 extractMention :: Text -> TextFragment
 extractMention x =
   if "@" `T.isPrefixOf` x
-     then Mention (T.tail x)
-     else PlainText x
+    then Mention (T.tail x)
+    else PlainText x
 
 extractTextMention :: Tg.Update -> Text -> [TextFragment]
 extractTextMention update text =
@@ -127,7 +132,7 @@ extractTextMention update text =
     Just xs ->
       let entities = flip filter xs $ \entity ->
             Tg.messageEntityType entity == Tg.MessageEntityTextMention
-       in replacing entities 1 text -- 1 since the initial slash is striped
+      in replacing entities 1 text -- 1 since the initial slash is striped
   where
     replacing :: [Tg.MessageEntity] -> Int -> Text -> [TextFragment]
     replacing [] _idx text = [PlainText text]
@@ -137,24 +142,23 @@ extractTextMention update text =
           Tg.User{..} = fromJust messageEntityUser
           (a, b) = T.splitAt (offset - idx) text
           (c, d) = T.splitAt length b
-
        in ( PlainText a
-          : TextMention userId c
-          : replacing xs (idx + offset + length) d
+              : TextMention userId c
+              : replacing xs (idx + offset + length) d
           )
 
-handleTargetUsername ::
-  ( MonadError () m
-  , MonadState Bool m -- isIgnoreBlacklist
-  )
+handleTargetUsername
+  :: ( Fail :> es
+     , State Bool :> es -- isIgnoreBlacklist
+     )
   => Text
   -> [TextFragment]
-  -> m [TextFragment]
+  -> Eff es [TextFragment]
 handleTargetUsername botUsername (PlainText x : remainder) = do
   let (cmd, username) = splitAtAt x
   if
     | T.null cmd && T.null username ->
-        throwError ()
+        fail ""
     | T.null cmd ->
         pure (Mention username : remainder)
     | T.null username ->
@@ -162,13 +166,13 @@ handleTargetUsername botUsername (PlainText x : remainder) = do
     | username == botUsername ->
         put True >> pure (PlainText cmd : remainder)
     | "bot" `T.isSuffixOf` T.toLower username ->
-        throwError ()
+        fail ""
     | otherwise ->
         pure (PlainText cmd : Mention username : remainder)
-handleTargetUsername _ [] = throwError ()
+handleTargetUsername _ [] = fail ""
 handleTargetUsername _ x = pure x
 
-tryConvertMentionToLink :: MonadIO m => TextFragment -> m Text
+tryConvertMentionToLink :: (MonadIO m) => TextFragment -> m Text
 tryConvertMentionToLink = \case
   PlainText x -> pure x
   TextMention userId name -> pure $ mentionWithId userId name
@@ -176,7 +180,7 @@ tryConvertMentionToLink = \case
     name <- fromMaybe "这位" <$> fetchName username
     pure $ mentionWithUsername username name
 
-fetchName :: MonadIO m => Text -> m (Maybe Text)
+fetchName :: (MonadIO m) => Text -> m (Maybe Text)
 fetchName username = do
   let req = parseRequest_ $ T.unpack $ toTgUserWebLink username
   resp <- liftIO $ httpBS req
@@ -189,10 +193,10 @@ extractNameFromHTML htmlText = html ^. lens
     html = HTML.parseLT $ LT.fromStrict htmlText
     lens =
       root
-      . cosmos
-      . attributeIs "class" "tgme_page_title"
-      ... named "span"
-      . text
+        . cosmos
+        . attributeIs "class" "tgme_page_title"
+        ... named "span"
+        . text
 
 -- return sender name and mention link builder (if it can)
 getSenderFromMessage :: Tg.Message -> Maybe (Maybe Text, Text -> Text)
@@ -227,9 +231,6 @@ toTgUserLink username = "tg://resolve?domain=" <> username
 
 toTgUserWebLink :: Text -> Text
 toTgUserWebLink username = "https://t.me/" <> username
-
-liftMaybe :: MonadError () m => Maybe a -> m a
-liftMaybe = maybe (throwError ()) pure
 
 splitAtAt :: Text -> (Text, Text)
 splitAtAt text =

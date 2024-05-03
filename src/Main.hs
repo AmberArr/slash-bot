@@ -1,207 +1,197 @@
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE GeneralisedNewtypeDeriving #-}
-{-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE MultiWayIf #-}
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes #-}
-{-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE ViewPatterns #-}
-{-# LANGUAGE TypeApplications #-}
+
 module Main where
 
 import Control.Concurrent
 import Control.Monad
-import Control.Monad.Reader
-import Control.Monad.Trans.Maybe
+import Control.Monad.Logger
+import Control.Monad.Reader qualified as Transformer
 import Data.Aeson (decode)
-import Data.Function
-import Data.Has
 import Data.Maybe
-import qualified Data.Set as Set
+import Data.Set qualified as Set
 import Data.String.Interpolate (i)
 import Data.Text (Text)
-import qualified Data.Text as T
+import Data.Text qualified as T
+import Database.Persist.Sql (runMigration)
 import Network.HTTP.Types
 import Network.Wai
 import Network.Wai.Handler.Warp as Warp
 import Network.Wai.Handler.WarpTLS as Warp
-import Servant.Client
 import System.Environment
-import qualified Telegram.Bot.API as Tg
-import Control.Monad.Except
-import Control.Monad.Trans.Control
-import Control.Monad.Logger
-import qualified Text.Regex.TDFA as Regex
-import Database.Persist.Sql (runMigration)
+import Telegram.Bot.API qualified as Tg
+import Text.Regex.TDFA qualified as Regex
 
-import Db
-import Bot
+import Effectful
+import Effectful.Dispatch.Dynamic
+import Effectful.Fail
+import Effectful.Labeled
+import Effectful.Reader.Static
+
+import Blacklist qualified (migration)
 import Config
+import Db
 import Interface
 import Parser
 import Util
-import qualified Blacklist (migrateAll)
 
-data Action =
-    Ping
-  | BlackListAdd ![Text]
-  | BlackListDel ![Text]
-  | BlackListAddRegex !Text
-  | BlackListDelRegex !Text
-  | BlackListList
-  | CheckBlackList !Text
-  | Reply !Text
-  deriving (Show, Eq)
+data Action :: Effect where
+  Ping :: Action m ()
+  BlackListAdd :: [Text] -> Action m ()
+  BlackListDel :: [Text] -> Action m ()
+  BlackListAddRegex :: Text -> Action m ()
+  BlackListDelRegex :: Text -> Action m ()
+  BlackListList :: Action m ()
+  CheckBlackList :: Text -> Action m ()
+  Reply :: Text -> Action m ()
+type instance DispatchOf Action = Dynamic
 
-handleUpdate :: (WithBlacklist m, WithBot r m, MonadIO m)
-             => Tg.Update -> m ()
-handleUpdate update = void $ runMaybeT $ do
-  botUsername <- asks (botCfgUsername . getter)
-  chatId <- hoistMaybe $ Tg.updateChatId update
-  cmdInfo <- fmap eitherToMaybe $ runExceptT $ parseUpdate update botUsername
-  let actions = actionRoute cmdInfo
-  message <- hoistMaybe $ update & Tg.updateMessage
+handleUpdate
+  :: ( Fail :> es
+     , IOE :> es
+     , Labeled "config" (Reader BotConfig) :> es
+     , Telegram :> es
+     , WithBlacklist :> es
+     )
+  => Tg.Update
+  -> Eff es ()
+handleUpdate update = void $ do
+  botUsername <- getUsername
+  Just chatId <- pure $ Tg.updateChatId update
+  cmdInfo <- parseUpdate update botUsername
+  Just message <- pure $ Tg.updateMessage update
   let messageId = Tg.messageMessageId message
-  lift $ handleEffectful chatId messageId actions
+  runAction chatId messageId $ actionRoute cmdInfo
 
-actionRoute :: Maybe CmdInfo -> [Action]
-actionRoute Nothing = fail ""
-actionRoute (Just CmdInfo{..}) = do
+actionRoute :: (Action :> es, Fail :> es) => CmdInfo -> Eff es ()
+actionRoute info@CmdInfo{..} = do
   if isActiveVoice
-    then activeVoiceHandler (cmd, remainder)
-    else passiveVoiceHandler (cmd, remainder)
-  where
-    activeVoiceHandler = \case
-      ("_ping", _)                    -> pure Ping
-      ("_blacklist", "add" : xs)      -> pure $ BlackListAdd xs
-      ("_blacklist", "del" : xs)      -> pure $ BlackListDel xs
-      ("_blacklist", "addregex" : xs) -> pure $ BlackListAddRegex $ T.drop 21 rawinput  -- it works, for now
-      ("_blacklist", "delregex" : xs) -> pure $ BlackListDelRegex $ T.drop 21 rawinput
-      ("_blacklist", [])              -> pure BlackListList
-      (_, T.unwords -> predicate)
-        | Just RequestingMode <- altMode -> pure $ Reply [i|#{subject} 叫 #{recipient} #{predicate}！|]
-      x | isIgnoreBlacklist -> continue x
-      x@(cmd, _) -> CheckBlackList ("/" <> cmd) : continue x
-    continue = \case
-      ("me", [])                      -> fail ""
-      ("you", [])                     -> fail ""
-      ("me", T.unwords -> predicate)  -> pure $ Reply [i|#{subject} #{predicate}！|]
-      ("you", T.unwords -> predicate) -> pure $ Reply [i|#{recipient} #{predicate}！|]
-      (verb, [])                      -> pure $ Reply [i|#{subject} #{verb} 了 #{recipient}！|]
-      (verb, T.unwords -> patient)    -> pure $ Reply [i|#{subject} #{verb} #{recipient} #{patient}！|]
-    passiveVoiceHandler = \case
-      (_, T.unwords -> predicate)
-        | Just RequestingMode <- altMode -> pure $ Reply [i|#{recipient} 叫 #{subject} #{predicate}！|]
-      x@(cmd, _)                       -> CheckBlackList ("\\" <> cmd) : continue2 x
-    continue2 = \case
-      (verb, [])                      -> pure $ Reply [i|#{subject} 被 #{recipient} #{verb} 了！|]
-      (verb , T.unwords -> patient)   -> pure $ Reply [i|#{subject} 被 #{recipient} #{verb}#{patient}！|]
+    then activeVoiceHandler info (cmd, remainder)
+    else passiveVoiceHandler info (cmd, remainder)
 
-handleEffectful :: (WithBlacklist m, WithBot r m)
-                => Tg.ChatId -> Tg.MessageId -> [Action] -> m ()
-handleEffectful chatId messageId [] = pure ()
-handleEffectful chatId messageId (action : actions) =
-  case action of
-    CheckBlackList cmd -> do
-      b <- checkBlacklist chatId cmd
-      unless b $ handleEffectful chatId messageId actions
-    _ -> continue action >> handleEffectful chatId messageId actions
+activeVoiceHandler :: (Action :> es, Fail :> es) => CmdInfo -> (Text, [Text]) -> Eff es ()
+activeVoiceHandler CmdInfo{..} = \case
+  ("_ping", _) -> send Ping
+  ("_blacklist", "add" : xs) -> send $ BlackListAdd xs
+  ("_blacklist", "del" : xs) -> send $ BlackListDel xs
+  ("_blacklist", "addregex" : xs) -> send $ BlackListAddRegex $ T.drop 21 rawinput -- it works, for now
+  ("_blacklist", "delregex" : xs) -> send $ BlackListDelRegex $ T.drop 21 rawinput
+  ("_blacklist", []) -> send BlackListList
+  (_, T.unwords -> predicate)
+    | Just RequestingMode <- altMode -> send $ Reply [i|#{subject} 叫 #{recipient} #{predicate}！|]
+  x | isIgnoreBlacklist -> continue x
+  x@(cmd, _) -> do
+    send (CheckBlackList ("/" <> cmd)) >> continue x
   where
     continue = \case
-      Ping -> reply' "111"
-      BlackListAdd xs -> do
-        forM_ xs $ addBlacklistItem chatId
-        reply' "ok"
-      BlackListDel xs -> do
-        forM_ xs $ delBlacklistItem chatId
-        reply' "ok"
-      BlackListList -> do
-        (plains, regexs) <- getBlacklist chatId
-        reply' $ T.unlines $
-          [ "Plaintext blacklist:"
-          , T.intercalate " " (Set.toList plains)
-          , ""
-          , "Regex blacklist:"
-          ]
+      ("me", []) -> fail ""
+      ("you", []) -> fail ""
+      ("me", T.unwords -> predicate) -> send $ Reply [i|#{subject} #{predicate}！|]
+      ("you", T.unwords -> predicate) -> send $ Reply [i|#{recipient} #{predicate}！|]
+      (verb, []) -> send $ Reply [i|#{subject} #{verb} 了 #{recipient}！|]
+      (verb, T.unwords -> patient) -> send $ Reply [i|#{subject} #{verb} #{recipient} #{patient}！|]
+
+passiveVoiceHandler :: (Action :> es, Fail :> es) => CmdInfo -> (Text, [Text]) -> Eff es ()
+passiveVoiceHandler CmdInfo{..} = \case
+  (_, T.unwords -> predicate)
+    | Just RequestingMode <- altMode -> send $ Reply [i|#{recipient} 叫 #{subject} #{predicate}！|]
+  x@(cmd, _) -> send (CheckBlackList ("\\" <> cmd)) >> continue x
+  where
+    continue = \case
+      (verb, []) -> send $ Reply [i|#{subject} 被 #{recipient} #{verb} 了！|]
+      (verb, T.unwords -> patient) -> send $ Reply [i|#{subject} 被 #{recipient} #{verb}#{patient}！|]
+
+runAction
+  :: (WithBlacklist :> es, Telegram :> es, Labeled "config" (Reader BotConfig) :> es, Fail :> es)
+  => Tg.ChatId
+  -> Tg.MessageId
+  -> Eff (Action ': es) a
+  -> Eff es a
+runAction chatId messageId = interpret $ \_ -> \case
+  CheckBlackList cmd ->
+    checkBlacklist chatId cmd >>= \b -> if b then pure () else fail ""
+  Ping -> reply "111"
+  BlackListAdd xs -> do
+    forM_ xs $ addBlacklistItem chatId
+    reply "ok"
+  BlackListDel xs -> do
+    forM_ xs $ delBlacklistItem chatId
+    reply "ok"
+  BlackListList -> do
+    (plains, regexs) <- getBlacklist chatId
+    reply $
+      T.unlines $
+        [ "Plaintext blacklist:"
+        , T.intercalate " " (Set.toList plains)
+        , ""
+        , "Regex blacklist:"
+        ]
           <> fmap codeMarkup regexs
-      BlackListAddRegex txt -> case unFail $ Regex.makeRegexM $ T.unpack txt of
-        Right (regex :: Regex.Regex) -> addBlacklistItem chatId (BLRegex txt) >> reply' "ok"
-        Left err -> reply' $ "Invalid regex: " <> T.pack err
-      BlackListDelRegex txt -> delBlacklistItem chatId (BLRegex txt) >> reply' "ok"
-      Reply x -> reply' x
-      CheckBlackList cmd -> undefined
-    reply' x = sendTextTo (Tg.SomeChatId chatId) (Just messageId) $ prependLTRMark x
+  BlackListAddRegex txt -> case runPureEff $ runFail $ Regex.makeRegexM $ T.unpack txt of
+    Right (regex :: Regex.Regex) -> addBlacklistItem chatId (BLRegex txt) >> reply "ok"
+    Left err -> reply $ "Invalid regex: " <> T.pack err
+  BlackListDelRegex txt -> delBlacklistItem chatId (BLRegex txt) >> reply "ok"
+  Reply x -> reply x
+  where
+    reply :: (Telegram :> es, Labeled "config" (Reader BotConfig) :> es) => Text -> Eff es ()
+    reply x = sendTextTo (Tg.SomeChatId chatId) (Just messageId) $ prependLTRMark x
     prependLTRMark x = "\8206" <> x
-
-
--- there's no MonadFail for (Either String) ...
-newtype Fail a = Fail { unFail :: Either String a }
-  deriving (Functor, Applicative, Monad)
-
-instance MonadFail Fail where
-  fail x = Fail (Left x)
 
 main :: IO ()
 main = do
   polling <- isJust <$> lookupEnv "POLLING"
   token <- Tg.Token . T.pack <$> getEnv "TOKEN"
-  clientEnv <- Tg.defaultTelegramClientEnv token
-  Just botUsername <- Tg.userUsername <$>
-    runReaderT (runTgApi_ Tg.getMe) clientEnv
 
   dburl <- T.pack <$> getEnv "DATABASE_URL"
   runNoLoggingT $ withDBConn dburl $ \conn -> do
-    let env = (BotConfig (Just Tg.HTML) botUsername, clientEnv, conn)
-    liftIO $ flip runReaderT conn $ runMigration Blacklist.migrateAll
-    if polling
-      then liftIO $ startPolling' env handleUpdate
-      else liftIO $ startWebhook env token handleUpdate
+    liftIO $ do
+      flip Transformer.runReaderT conn $ runMigration Blacklist.migration
+      print =<<
+        ( runEff
+            . runFail
+            . runTelegramContext token
+            . runWithBlacklist conn
+            . runLabeled @"config" (runReader (BotConfig (Just Tg.HTML)))
+        )
+          (if polling then startPolling handleUpdate else startWebhook token handleUpdate)
 
-startPolling' :: Env -> (Tg.Update -> BotM a) -> IO ()
-startPolling' env handler =
-  controlT (\run -> startPolling $ run . handler) `runBotM_` env
+type Effects = [Labeled "config" (Reader BotConfig), WithBlacklist, Telegram, Fail, IOE]
 
--- Steal from Telegram.Bot.Simple.BotApp.Internal
-startPolling :: (Tg.Update -> ClientM a) -> ClientM a
+startWebhook :: (Effects ~ es) => Tg.Token -> (Tg.Update -> Eff es b) -> Eff es ()
+startWebhook (Tg.Token token) handleUpdate = do
+  runServer <- liftIO initWebhookServer
+  withSeqEffToIO $ \run -> do
+    runServer $ \req respond -> do
+      if pathInfo req == ["bot" <> token]
+        then do
+          mupdate <- decode <$> strictRequestBody req
+          forM_ mupdate $ \update ->
+            run $ handleUpdate update
+          respond $ responseLBS status200 [] ""
+        else respond $ responseLBS status404 [] ""
+
+startPolling :: (Effects ~ es) => (Tg.Update -> Eff es b) -> Eff es ()
 startPolling handleUpdate = go Nothing
   where
     go lastUpdateId = do
       let inc (Tg.UpdateId n) = Tg.UpdateId (n + 1)
           offset = fmap inc lastUpdateId
       res <-
-        (Right <$> Tg.getUpdates
-          (Tg.GetUpdatesRequest offset Nothing (Just 25) Nothing))
-        `catchError` (pure . Left)
+        runTelegramMethodEither $
+          Tg.getUpdates (Tg.GetUpdatesRequest offset Nothing (Just 25) Nothing)
 
       nextUpdateId <- case res of
         Left servantErr -> do
-          liftIO (print servantErr)
+          liftIO $ print servantErr
           pure lastUpdateId
-        Right result -> do
-          let updates = Tg.responseResult result
-              updateIds = map Tg.updateUpdateId updates
+        Right updates -> do
+          let updateIds = map Tg.updateUpdateId updates
               maxUpdateId = maximum (Nothing : map Just updateIds)
           mapM_ handleUpdate updates
           pure maxUpdateId
       liftIO $ threadDelay 1000000
       go nextUpdateId
-
-startWebhook :: Env -> Tg.Token -> (Tg.Update -> BotM a)  -> IO ()
-startWebhook env (Tg.Token token) handler0 = do
-  runServer <- initWebhookServer
-  runServer $ \req respond -> do
-    if pathInfo req == ["bot" <> token]
-      then do
-        mupdate <- decode <$> strictRequestBody req
-        forM_ mupdate $ \update ->
-          forkIO $ handler update
-        respond $ responseLBS status200 [] ""
-      else
-        respond $ responseLBS status404 [] ""
-  where
-      handler x = handler0 x `runBotM_` env
 
 initWebhookServer :: IO (Network.Wai.Application -> IO ())
 initWebhookServer = do
@@ -209,17 +199,13 @@ initWebhookServer = do
   maybeCert <- lookupEnv "SERVER_CERT"
   maybeKey <- lookupEnv "SERVER_KEY"
   pure $ case (maybeCert, maybeKey) of
-    (Just cert, Just key) -> let tlsSetting = Warp.tlsSettings cert key
-                                 setting = Warp.setPort port Warp.defaultSettings
-                              in Warp.runTLS tlsSetting setting
-    _                     -> Warp.runEnv port
+    (Just cert, Just key) ->
+      let tlsSetting = Warp.tlsSettings cert key
+          setting = Warp.setPort port Warp.defaultSettings
+      in Warp.runTLS tlsSetting setting
+    _ -> Warp.runEnv port
   where
     runReadPort :: String -> IO Int
     runReadPort sp = case reads sp of
-        ((p', _):_) -> pure p'
-        _ -> fail $ "Invalid value in $PORT: " ++ sp
-
-
-eitherToMaybe :: Either e a -> Maybe a
-eitherToMaybe (Left _) = Nothing
-eitherToMaybe (Right a) = Just a
+      ((p', _) : _) -> pure p'
+      _ -> fail $ "Invalid value in $PORT: " ++ sp
