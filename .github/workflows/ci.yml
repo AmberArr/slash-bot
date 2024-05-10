@@ -35,7 +35,7 @@ jobs:
           ${{ runner.os }}-stack-global-
 
     - name: Build dependencies
-      run: stack bulid --only-dependencies
+      run: stack build --only-dependencies
 
     - name: Build
       run: stack build
