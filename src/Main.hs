@@ -161,7 +161,7 @@ type Effects = [Labeled "config" (Reader BotConfig), WithBlacklist, Telegram, Fa
 startWebhook :: (Effects ~ es) => Tg.Token -> (Tg.Update -> Eff es b) -> Eff es ()
 startWebhook (Tg.Token token) handleUpdate = do
   runServer <- liftIO initWebhookServer
-  withSeqEffToIO $ \run -> do
+  withEffToIO (ConcUnlift Persistent Unlimited) $ \run -> do
     runServer $ \req respond -> do
       if pathInfo req == ["bot" <> token]
         then do
