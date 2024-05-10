@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    - uses: haskell-actions/setup@v2
+      with:
+        ghc-version: '9.8.2'
+        enable-stack: true
+        stack-version: 'latest'
+
+    - name: Use system ghc
+      run: |
+        stack config set install-ghc false --global
+        stack config set system-ghc  true  --global
+
+    - name: Cache ~/.stack
+      uses: actions/cache@v4
+      with:
+        path: ~/.stack
+        key: ${{ runner.os }}-stack-global-${{ hashFiles('stack.yaml') }}-${{ hashFiles('slash-bot.cabal') }}
+        restore-keys: |
+          ${{ runner.os }}-stack-global-
+
+    - name: Build dependencies
+      run: stack bulid --only-dependencies
+
+    - name: Build
+      run: stack build
